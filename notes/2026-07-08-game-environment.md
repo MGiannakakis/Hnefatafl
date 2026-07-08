@@ -19,8 +19,8 @@ RL libraries expect a "world" with a standard interface (the **Gymnasium** API):
 From [env/tafl_wrapper.py:99](../env/tafl_wrapper.py#L99), when the agent submits a move:
 
 1. **Safety check** — if the move is illegal (shouldn't happen thanks to masking), end the game with reward -1.0.
-2. **Apply the agent's move** via the engine. If it ends the game (king captured / king escaped / draw), return the final reward and stop.
-3. **Let the opponent play** — `_play_opponent()` ([line 206](../env/tafl_wrapper.py#L206)) calls `opponent_fn(board, valid_actions)` until it's the agent's turn again. If the game ends on the opponent's move, the agent receives **-1.0** ([line 127](../env/tafl_wrapper.py#L127)) — losing hurts no matter whose move sealed it.
+2. **Apply the agent's move** via the engine. If it ends the game (king captured / king escaped / draw), the reward is decided purely by *who won*: +1 / 0 / -1.
+3. **Let the opponent play** — `_play_opponent()` calls `opponent_fn(board, valid_actions)` until it's the agent's turn again. If the game ends on the opponent's move, the same who-won mapping applies — a loss hurts no matter whose move sealed it, and a draw is worth 0 no matter whose move triggered it.
 4. **Return** the new board encoding, the reward, and a fresh action mask.
 
 The opponent is just a plugged-in function. It starts as `random_opponent` ([line 216](../env/tafl_wrapper.py#L216)) — pick any legal move uniformly — and during training gets swapped for a frozen copy of the agent itself (see the [self-play note](2026-07-08-self-play-training.md)). `set_opponent()` ([line 149](../env/tafl_wrapper.py#L149)) does the swap.
@@ -40,13 +40,20 @@ This choice is a real research variable: canonical vs perspective changes how we
 
 ## Rewards in one place
 
+Rewards are **terminal-only and side-aware**: the wrapper looks at `info["winner"]` when
+the game ends and compares it to the side the agent is playing. The engine's own shaped
+per-move reward is deliberately discarded — it scores material with fixed signs (king and
+defenders positive, attackers negative) regardless of which side is learning, and paying
+it every move taught the attacker to stall for draws instead of winning.
+
 | Event | Reward |
 |---|---|
-| Agent's move wins the game | ~ +1 (from the engine) |
-| Game ends in a loss on the opponent's move | -1.0 |
-| Opponent left with no legal moves | +1.0 |
+| Agent's side wins — on anyone's move | +1.0 |
+| Agent's side loses — on anyone's move | -1.0 |
+| Draw (move limit, threefold repetition, 50 turns without capture) | 0.0 |
+| Opponent left with no legal moves | +1.0 (a win: no moves = you lose) |
 | Illegal action (masking failed) | -1.0, game over |
-| Ordinary mid-game move | ~ 0 |
+| Ordinary mid-game move | 0.0 exactly |
 
 ## The working-directory gotcha
 

@@ -25,7 +25,7 @@ Those **256 numbers are a learned summary of the position** — not human-interp
 
 ## What SB3 adds on top
 
-When `MaskablePPO` is constructed with this extractor ([training/self_play.py:154](../training/self_play.py#L154)), it appends two small heads reading those 256 features:
+When `MaskablePPO` is constructed with this extractor ([training/self_play.py:155](../training/self_play.py#L155)), it appends two small heads reading those 256 features:
 
 - **Policy head (the "actor")** → 1296 scores, masked to legal moves, softmaxed into move probabilities. *This chooses moves.*
 - **Value head (the "critic")** → 1 number: expected final reward from here. *This judges positions* — its predictions are what make the training signal informative (see [RL basics](2026-07-08-rl-basics.md)).

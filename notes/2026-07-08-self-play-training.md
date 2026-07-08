@@ -13,7 +13,7 @@
 
 1. **8 environments are created** ([make_vec_env, line 103](../training/self_play.py#L103)), each in its **own OS process** (`SubprocVecEnv`), so 8 games run simultaneously on different CPU cores. Each env is wrapped twice: `ActionMasker` (exposes legal-move masks to PPO) and `Monitor` (records episode rewards/lengths for the logs).
 2. **The opponent in every env starts as pure random** — the agent's first sparring partner is a coin-flipper.
-3. **The MaskablePPO model is built** ([line 154](../training/self_play.py#L154)) with the `TaflCNN` extractor. Fresh random weights: at this point the agent is also essentially a coin-flipper.
+3. **The MaskablePPO model is built** ([line 155](../training/self_play.py#L155)) with the `TaflCNN` extractor. Fresh random weights: at this point the agent is also essentially a coin-flipper.
 
 ## The core loop (repeats until 1,000,000 timesteps)
 
@@ -55,4 +55,4 @@ One subtlety when reading the reward curve: because the opponent keeps improving
 
 ## The finish line
 
-After 1M timesteps the model is saved to `checkpoints/<run_name>/final_model.zip`. That checkpoint is the input to Phase 2: [training/cross_play.py:24](../training/cross_play.py#L24) loads it, points it at the *opposite* side, and fine-tunes — measuring how much attacker knowledge transfers to playing defender (or vice versa). `zero_shot_eval` ([line 78](../training/cross_play.py#L78)) measures transfer with *no* fine-tuning at all.
+Along the way, an interim checkpoint (`model_<steps>_steps.zip`) is saved every 25,000 timesteps (`checkpoint_freq`), so an interrupted run keeps its latest weights. After 1M timesteps the model is saved to `checkpoints/<run_name>/final_model.zip`. That checkpoint is the input to Phase 2: [training/cross_play.py:24](../training/cross_play.py#L24) loads it, points it at the *opposite* side, and fine-tunes — measuring how much attacker knowledge transfers to playing defender (or vice versa). `zero_shot_eval` ([line 88](../training/cross_play.py#L88)) measures transfer with *no* fine-tuning at all.

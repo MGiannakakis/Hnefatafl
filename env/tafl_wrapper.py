@@ -11,12 +11,19 @@ os.chdir(_PROJECT_ROOT)
 
 from gym_tafl.envs._game_engine import GameEngine
 from gym_tafl.envs._utils import make_dictionaries, IDX_TO_POS
-from gym_tafl.envs.configs import ATK, DEF, KING
+from gym_tafl.envs.configs import ATK, DEF, DRAW, KING
 
 from env.observations import encode_observation, BOARD_SIZE, N_CHANNELS
 
 N_ACTIONS = 1296  # all possible (from, to) moves on a 9x9 board
 make_dictionaries(BOARD_SIZE, BOARD_SIZE)  # populate IDX_TO_POS / POS_TO_IDX
+
+# Terminal rewards from the learning agent's perspective ("win" means
+# info["winner"] == self.side, whichever side that is). All non-terminal
+# moves pay 0 — see _apply_move for why the engine's shaped reward is unused.
+WIN_REWARD = 1.0
+DRAW_REWARD = 0.0
+LOSS_REWARD = -1.0
 
 OpponentFn = Callable[[np.ndarray, list], int]
 
@@ -28,6 +35,10 @@ class TaflEnv(gym.Env):
     The learning agent controls `side` (ATK or DEF). The other side is driven
     by `opponent_fn(board, valid_actions) -> action_index`. Defaults to a
     uniformly random opponent.
+
+    Rewards are terminal-only and side-aware: +1 when `side` wins, -1 when it
+    loses (including when the loss lands on the opponent's move, or on an
+    unmasked invalid action), 0 for draws and every non-terminal move.
 
     Supports action masking via `action_masks()` for use with MaskablePPO.
     """
@@ -99,36 +110,31 @@ class TaflEnv(gym.Env):
     def step(self, action: int):
         assert not self._done, "Episode is over — call reset() first"
 
-        # Hard penalty for an invalid action (MaskablePPO should prevent this)
+        # An unmasked invalid action counts as a loss (MaskablePPO should prevent this)
         if action not in self._valid_actions:
             self._done = True
             obs = encode_observation(self._board, self.side, self.obs_mode)
-            return obs, -1.0, True, False, {
+            return obs, LOSS_REWARD, True, False, {
                 "invalid_action": True,
                 "action_mask": self.action_masks(),
                 "final_board": self._board.copy(),
             }
 
-        # Apply our move
-        reward, terminated, info = self._apply_move(action, self._current_player)
-        if terminated:
-            self._done = True
-            obs = encode_observation(self._board, self.side, self.obs_mode)
-            info["action_mask"] = self.action_masks()
-            info["final_board"] = self._board.copy()
-            return obs, reward, True, False, info
-
-        # Opponent plays until it's our turn again or game ends
-        opp_done, opp_info = self._play_opponent()
-        if opp_done:
-            self._done = True
-            obs = encode_observation(self._board, self.side, self.obs_mode)
-            merged = {**info, **opp_info, "action_mask": self.action_masks(), "final_board": self._board.copy()}
-            return obs, -1.0, True, False, merged
+        # Apply our move; if the game continues, the opponent plays until it's
+        # our turn again or the game ends on their move.
+        terminated, info = self._apply_move(action, self._current_player)
+        if not terminated:
+            terminated, opp_info = self._play_opponent()
+            info = {**info, **opp_info}
 
         obs = encode_observation(self._board, self.side, self.obs_mode)
         info["action_mask"] = self.action_masks()
-        return obs, reward, False, False, info
+        if terminated:
+            self._done = True
+            info["final_board"] = self._board.copy()
+            return obs, self._terminal_reward(info["winner"]), True, False, info
+
+        return obs, 0.0, False, False, info
 
     def render(self):
         pass
@@ -162,11 +168,26 @@ class TaflEnv(gym.Env):
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _terminal_reward(self, winner: int) -> float:
+        """Map the game's outcome to the learning agent's reward."""
+        if winner == self.side:
+            return WIN_REWARD
+        if winner == DRAW:
+            return DRAW_REWARD
+        return LOSS_REWARD
+
     def _apply_move(self, action: int, player: int):
-        """Apply `action` for `player`. Returns (reward, terminated, info)."""
+        """Apply `action` for `player`. Returns (terminated, info); every
+        terminal path sets info["winner"], from which step() derives the
+        agent's reward.
+
+        The engine's per-move shaped reward (res["reward"]) is deliberately
+        discarded: it pays board_value (king/defenders positive, attackers
+        negative) to whichever side moves, so it is misaligned for the ATK
+        agent and rewards both sides for prolonging the game.
+        """
         move = IDX_TO_POS[action]
         res = self._engine.apply_move(self._board, move)
-        reward = res["reward"]
         info = {"move": res["move"]}
 
         if res["game_over"]:
@@ -176,7 +197,7 @@ class TaflEnv(gym.Env):
                 info.update({"winner": ATK, "reason": "King captured"})
             else:
                 info.update({"winner": DEF, "reason": "King escaped"})
-            return reward, True, info
+            return True, info
 
         end = self._engine.check_endgame(
             last_moves=self._last_moves,
@@ -184,10 +205,9 @@ class TaflEnv(gym.Env):
             player=player,
             n_moves=self._n_moves,
         )
-        reward += end["reward"]
         if end["game_over"]:
             info.update({"reason": end["reason"], "winner": end["winner"]})
-            return reward, True, info
+            return True, info
 
         # Advance state
         if len(self._last_moves) == 8:
@@ -198,16 +218,17 @@ class TaflEnv(gym.Env):
         self._valid_actions = self._engine.legal_moves(self._board, self._current_player)
 
         if not self._valid_actions:
-            info["reason"] = "No moves available"
-            return reward + 1.0, True, info
+            # A player with no legal moves loses, so the mover wins
+            info.update({"winner": player, "reason": "No moves available"})
+            return True, info
 
-        return reward, False, info
+        return False, info
 
     def _play_opponent(self):
         """Drive the opponent until it's our turn or game ends. Returns (done, info)."""
         while self._current_player != self.side:
             action = self.opponent_fn(self._board, self._valid_actions)
-            _, terminated, info = self._apply_move(action, self._current_player)
+            terminated, info = self._apply_move(action, self._current_player)
             if terminated:
                 return True, info
         return False, {}

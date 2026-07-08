@@ -72,7 +72,10 @@ gym_tafl (external engine)  →  env/  →  agents/  →  training/  →  experi
 
 - `env/tafl_wrapper.py` — `TaflEnv`, a **single-agent** Gymnasium wrapper: the opponent lives
   *inside* the env as `opponent_fn(board, valid_actions) -> action`, called during `step()`
-  until it's the agent's turn again. Losing on the opponent's move returns reward -1.0.
+  until it's the agent's turn again. Rewards are terminal-only and side-aware (+1 win /
+  -1 loss / 0 draw, mapped from `info["winner"]` vs the agent's side); the engine's shaped
+  per-move reward is deliberately discarded — it is defender-centric material scoring paid
+  every move, which trained the attacker to stall for draws (don't reintroduce it).
   Action space is `Discrete(1296)`: 81 squares x 16 rook-style destinations (8 per row +
   8 per column), indexed via `gym_tafl`'s `IDX_TO_POS`. Exposes `action_masks()` for
   MaskablePPO (sb3-contrib `ActionMasker`).
@@ -107,3 +110,7 @@ gym_tafl (external engine)  →  env/  →  agents/  →  training/  →  experi
 Game rules (board layout, capture rules, draw conditions) are configured in
 `variants/tablut.ini`, parsed by the external engine — new variants are added as
 `variants/<name>.ini` and selected via `TaflEnv(variant=...)`.
+
+`notes/` holds plain-English explainer notes for the codebase (linked markdown with
+line-level code references) — when a change invalidates something they describe, update
+the affected note.

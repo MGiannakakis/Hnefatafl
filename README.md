@@ -93,6 +93,7 @@ Everything is refreshed every PPO update (tune with `training.plot_freq=<timeste
 | [training/cross_play.py](training/cross_play.py) | Phase 2 transfer fine-tuning and zero-shot evaluation |
 | [eval/metrics.py](eval/metrics.py) | Win-rate measurement and a simple Elo tracker |
 | [experiments/run.py](experiments/run.py) | Hydra CLI dispatching `mode=train\|cross_play\|eval` |
+| [notes/](notes/) | Plain-English explainer notes on the codebase and how the RL training works (start at the overview note) |
 | [variants/tablut.ini](variants/tablut.ini) | Game rules (board layout, king capture, draw conditions) read by tafl-gym |
 | [configs.ini](configs.ini) | Piece/player constants read by tafl-gym |
 
@@ -104,7 +105,9 @@ repo root.
 
 - **Action space:** `Discrete(1296)` — 81 squares x 16 rook-style destinations (8 in the
   row, 8 in the column). Illegal moves are masked out via sb3-contrib's `ActionMasker`.
-- **Rewards:** engine-shaped move rewards, +1-style terminal bonus on wins, -1.0 when the
-  opponent's move ends the game or on an unmasked invalid action.
+- **Rewards:** terminal-only and side-aware — +1 if the agent's side wins, -1 if it loses
+  (on anyone's move, or on an unmasked invalid action), 0 for draws and all mid-game moves.
+  The engine's shaped per-move rewards are discarded (defender-centric material scoring
+  that rewarded stalling).
 - **Draws:** 50 turns without capture, threefold repetition, or the 100-move cap
   (see [variants/tablut.ini](variants/tablut.ini)).

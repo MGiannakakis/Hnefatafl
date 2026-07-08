@@ -52,6 +52,7 @@ From [default.yaml](../experiments/configs/default.yaml):
 | `training.n_envs` | 8 | Parallel game processes |
 | `training.vec_env` | `subproc` | Set to `dummy` for single-process debugging (breakpoints work) |
 | `training.plot_freq` | 10k | Dashboard/plot refresh; `0` disables diagnostics |
+| `training.checkpoint_freq` | 25k | Interim checkpoint saves; `0` disables |
 | `training.use_wandb` | false | Mirror logs to Weights & Biases |
 
 ## Where outputs land
@@ -59,6 +60,8 @@ From [default.yaml](../experiments/configs/default.yaml):
 ```
 checkpoints/<run_name>/          e.g. selfplay_atk_canonical/
 ├── final_model.zip              the trained agent (policy + weights)
+├── model_<steps>_steps.zip      interim checkpoints every 25k steps
+│                                (training.checkpoint_freq; interrupted runs keep weights)
 ├── logs/progress.csv            metrics feed for diagnostics
 ├── tb_logs/                     TensorBoard logs
 └── diagnostics/
