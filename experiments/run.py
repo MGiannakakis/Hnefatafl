@@ -53,6 +53,7 @@ def main(cfg: DictConfig):
             run_name=cfg.training.run_name,
             use_wandb=cfg.training.use_wandb,
             verbose=cfg.training.verbose,
+            plot_freq=cfg.training.plot_freq,
         )
 
     elif mode == "cross_play":

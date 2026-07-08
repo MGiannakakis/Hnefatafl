@@ -45,8 +45,9 @@ class SelfPlayCallback(BaseCallback):
     def _snapshot_opponent(self):
         policy = copy.deepcopy(self.model.policy)
         policy.set_training_mode(False)
-        env_side = self.train_env.env.side  # unwrap Monitor
-        env_obs_mode = self.train_env.env.obs_mode
+        base_env = self.train_env.unwrapped  # walk Monitor -> ActionMasker -> TaflEnv
+        env_side = base_env.side
+        env_obs_mode = base_env.obs_mode
 
         def opponent_fn(board, valid_actions):
             from env.observations import encode_observation
@@ -63,7 +64,7 @@ class SelfPlayCallback(BaseCallback):
                 action = valid_actions[np.random.randint(len(valid_actions))]
             return action
 
-        self.train_env.env.opponent_fn = opponent_fn
+        base_env.opponent_fn = opponent_fn
         if self.verbose:
             print(f"[SelfPlay] Opponent updated at step {self.num_timesteps}")
 
@@ -90,6 +91,7 @@ def train(
     run_name: Optional[str] = None,
     use_wandb: bool = False,
     verbose: int = 1,
+    plot_freq: int = 2048,
 ):
     from gym_tafl.envs.configs import ATK
     from agents.networks import TaflCNN
@@ -121,6 +123,18 @@ def train(
     )
 
     callbacks = [SelfPlayCallback(env, opponent_update_freq=opponent_update_freq, verbose=verbose)]
+
+    if plot_freq and plot_freq > 0:
+        from stable_baselines3.common.logger import configure
+        from training.diagnostics import DiagnosticsCallback
+        log_dir = save_dir / "logs"
+        model.set_logger(configure(str(log_dir), ["stdout", "csv", "tensorboard"]))
+        callbacks.append(DiagnosticsCallback(
+            log_dir=log_dir,
+            out_dir=save_dir / "diagnostics",
+            plot_freq=plot_freq,
+            verbose=verbose,
+        ))
 
     if use_wandb:
         import wandb

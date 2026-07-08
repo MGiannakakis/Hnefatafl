@@ -1,0 +1,94 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+RL research project training agents to play Hnefatafl (Tablut variant, 9x9) with MaskablePPO.
+The research is phased: Phase 1 = single-side self-play training, Phase 2 = cross-perspective
+transfer (fine-tune an ATK-trained policy to play DEF, or vice versa), Phase 3 = shared
+representation (side-conditioned network, see `SharedTaflCNN`).
+
+The game engine itself is NOT in this repo — it comes from the external `gym_tafl` package
+(`tafl-gym`, installed from GitHub via requirements.txt). This repo wraps it for SB3.
+
+## Commands
+
+Uses the `hnefatafl` conda environment:
+
+```bash
+conda activate hnefatafl
+pip install -r requirements.txt   # torch installed separately (CPU or CUDA build)
+```
+
+All experiments go through the Hydra entry point (config: `experiments/configs/default.yaml`):
+
+```bash
+# Phase 1 — self-play training
+python experiments/run.py mode=train training.side=atk
+
+# Phase 2 — cross-perspective transfer
+python experiments/run.py mode=cross_play \
+    cross_play.source_ckpt=checkpoints/selfplay_atk_canonical/final_model \
+    cross_play.target_side=def
+
+# Evaluation vs random opponent
+python experiments/run.py mode=eval eval.ckpt=<path> eval.side=atk
+
+# Any config value is overridable Hydra-style, e.g.:
+python experiments/run.py training.side=def obs_mode=perspective training.use_wandb=true
+```
+
+Checkpoints save to `checkpoints/<run_name>/final_model.zip`. There are no tests or linter configured.
+
+## Critical gotcha: working directory
+
+`gym_tafl` loads `configs.ini` and `variants/<variant>.ini` **relative to the current working
+directory** at import/instantiation time. That is why:
+
+- `configs.ini` and `variants/tablut.ini` live at the repo root — they are consumed by
+  `gym_tafl`, not read directly by this repo's code.
+- `env/tafl_wrapper.py` and `env/observations.py` call `os.chdir(_PROJECT_ROOT)` at module
+  import time, and training/eval functions re-chdir defensively. Importing `env.*` changes
+  your process cwd as a side effect — preserve this pattern in new modules that touch `gym_tafl`.
+- Modules use lazy (function-level) imports of `gym_tafl` and `env.*` deliberately, so the
+  chdir happens before the ini files load. Don't "clean up" these imports to top-level.
+
+## Architecture
+
+Layered data flow:
+
+```
+gym_tafl (external engine)  →  env/  →  agents/  →  training/  →  experiments/run.py
+                                          ↘  eval/metrics.py
+```
+
+- `env/tafl_wrapper.py` — `TaflEnv`, a **single-agent** Gymnasium wrapper: the opponent lives
+  *inside* the env as `opponent_fn(board, valid_actions) -> action`, called during `step()`
+  until it's the agent's turn again. Losing on the opponent's move returns reward -1.0.
+  Action space is `Discrete(1296)`: 81 squares x 16 rook-style destinations (8 per row +
+  8 per column), indexed via `gym_tafl`'s `IDX_TO_POS`. Exposes `action_masks()` for
+  MaskablePPO (sb3-contrib `ActionMasker`).
+- `env/observations.py` — two 9x9x6 encodings selected by `obs_mode`: `canonical`
+  (absolute attacker/defender/king channels + side flag in channel 5) and `perspective`
+  (own/enemy relative). Constants `ATK`, `DEF`, `KING`, etc. come from `gym_tafl.envs.configs`
+  (values defined in `configs.ini`).
+- `agents/networks.py` — SB3 `BaseFeaturesExtractor`s. `TaflCNN` is the default.
+  `SharedTaflCNN` routes through ATK/DEF-specific heads by reading the side flag from
+  observation channel 5 — it only works with `obs_mode=canonical`.
+- `training/self_play.py` — `SelfPlayCallback` snapshots the current policy every
+  `opponent_update_freq` timesteps and installs it as the env's `opponent_fn` (deep-copied,
+  eval mode). Until the first snapshot the opponent is uniform random. Reach the base env
+  through `.unwrapped` (wrapping is TaflEnv → ActionMasker → Monitor; Gymnasium 1.x does
+  not forward attribute access through wrappers).
+- `training/diagnostics.py` — `DiagnosticsCallback` regenerates
+  `checkpoints/<run>/diagnostics/{dashboard,recent_games}.png` every `training.plot_freq`
+  timesteps (0 disables), reading losses from the CSV logger set up in `train()` and final
+  boards from the `final_board` key `TaflEnv` puts in `info` at episode end.
+- `training/cross_play.py` — loads a checkpoint, swaps the env side, fine-tunes with
+  self-play; `zero_shot_eval()` measures transfer without fine-tuning.
+- `experiments/run.py` — dispatches `mode=train|cross_play|eval` to the above; the only CLI.
+
+Game rules (board layout, capture rules, draw conditions) are configured in
+`variants/tablut.ini`, parsed by the external engine — new variants are added as
+`variants/<name>.ini` and selected via `TaflEnv(variant=...)`.

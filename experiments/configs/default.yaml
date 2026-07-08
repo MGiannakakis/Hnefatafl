@@ -2,6 +2,7 @@
 # Run: python experiments/run.py (uses this file)
 # Override: python experiments/run.py training.side=def obs_mode=perspective
 
+mode: train                # train | cross_play | eval
 obs_mode: canonical        # canonical | perspective
 variant: tablut
 
@@ -18,6 +19,7 @@ training:
   run_name: null           # auto-generated if null
   use_wandb: false
   verbose: 1
+  plot_freq: 2048          # regenerate diagnostic figures every N timesteps; 0 disables
 
 cross_play:
   source_ckpt: null        # path to trained model; required for cross-play mode

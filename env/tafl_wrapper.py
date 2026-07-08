@@ -96,7 +96,11 @@ class TaflEnv(gym.Env):
         if action not in self._valid_actions:
             self._done = True
             obs = encode_observation(self._board, self.side, self.obs_mode)
-            return obs, -1.0, True, False, {"invalid_action": True, "action_mask": self.action_masks()}
+            return obs, -1.0, True, False, {
+                "invalid_action": True,
+                "action_mask": self.action_masks(),
+                "final_board": self._board.copy(),
+            }
 
         # Apply our move
         reward, terminated, info = self._apply_move(action, self._current_player)
@@ -104,6 +108,7 @@ class TaflEnv(gym.Env):
             self._done = True
             obs = encode_observation(self._board, self.side, self.obs_mode)
             info["action_mask"] = self.action_masks()
+            info["final_board"] = self._board.copy()
             return obs, reward, True, False, info
 
         # Opponent plays until it's our turn again or game ends
@@ -111,7 +116,7 @@ class TaflEnv(gym.Env):
         if opp_done:
             self._done = True
             obs = encode_observation(self._board, self.side, self.obs_mode)
-            merged = {**info, **opp_info, "action_mask": self.action_masks()}
+            merged = {**info, **opp_info, "action_mask": self.action_masks(), "final_board": self._board.copy()}
             return obs, -1.0, True, False, merged
 
         obs = encode_observation(self._board, self.side, self.obs_mode)
