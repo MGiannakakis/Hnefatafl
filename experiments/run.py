@@ -49,12 +49,15 @@ def main(cfg: DictConfig):
             n_steps=cfg.training.n_steps,
             batch_size=cfg.training.batch_size,
             n_epochs=cfg.training.n_epochs,
+            n_envs=cfg.training.n_envs,
+            vec_env=cfg.training.vec_env,
             save_dir=cfg.training.save_dir,
             run_name=cfg.training.run_name,
             use_wandb=cfg.training.use_wandb,
             verbose=cfg.training.verbose,
             plot_freq=cfg.training.plot_freq,
             dashboard_port=cfg.training.dashboard_port,
+            checkpoint_freq=cfg.training.checkpoint_freq,
         )
 
     elif mode == "cross_play":
@@ -70,8 +73,13 @@ def main(cfg: DictConfig):
             total_timesteps=cfg.cross_play.total_timesteps,
             opponent_update_freq=cfg.cross_play.opponent_update_freq,
             obs_mode=cfg.obs_mode,
+            n_steps=cfg.cross_play.n_steps,
+            batch_size=cfg.cross_play.batch_size,
+            n_envs=cfg.cross_play.n_envs,
+            vec_env=cfg.cross_play.vec_env,
             run_name=cfg.cross_play.run_name,
             use_wandb=cfg.cross_play.use_wandb,
+            checkpoint_freq=cfg.cross_play.checkpoint_freq,
         )
 
     elif mode == "eval":

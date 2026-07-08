@@ -55,7 +55,16 @@ class TaflEnv(gym.Env):
             dtype=np.float32,
         )
 
-        self._engine: Optional[GameEngine] = None
+        # Build the engine once and reuse it across episodes: construction
+        # re-reads variants/<variant>.ini from disk, and fill_board also
+        # accumulates into engine.MAX_REWARD, so both must run exactly once.
+        # The only per-episode engine state is no_capture_turns_counter,
+        # which reset() clears.
+        os.chdir(_PROJECT_ROOT)
+        self._engine = GameEngine(self.variant)
+        self._start_board = np.zeros((BOARD_SIZE, BOARD_SIZE))
+        self._engine.fill_board(self._start_board)
+
         self._board: Optional[np.ndarray] = None
         self._current_player: int = ATK
         self._valid_actions: list = []
@@ -69,10 +78,8 @@ class TaflEnv(gym.Env):
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
-        os.chdir(_PROJECT_ROOT)
-        self._engine = GameEngine(self.variant)
-        self._board = np.zeros((BOARD_SIZE, BOARD_SIZE))
-        self._engine.fill_board(self._board)
+        self._board = self._start_board.copy()
+        self._engine.no_capture_turns_counter = 0
         self._current_player = self._engine.STARTING_PLAYER
         self._valid_actions = self._engine.legal_moves(self._board, self._current_player)
         self._last_moves = []
@@ -132,13 +139,18 @@ class TaflEnv(gym.Env):
 
     def action_masks(self) -> np.ndarray:
         mask = np.zeros(N_ACTIONS, dtype=bool)
-        for a in self._valid_actions:
-            mask[a] = True
+        mask[self._valid_actions] = True
         return mask
 
     # ------------------------------------------------------------------
     # Accessors
     # ------------------------------------------------------------------
+
+    def set_opponent(self, opponent_fn: OpponentFn) -> None:
+        """Install a new opponent. Reachable through the wrapper stack via
+        VecEnv.env_method("set_opponent", ...) — do not use VecEnv.set_attr,
+        which only touches the outermost wrapper."""
+        self.opponent_fn = opponent_fn
 
     def get_board(self) -> np.ndarray:
         return self._board.copy()

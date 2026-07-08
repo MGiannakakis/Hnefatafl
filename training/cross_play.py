@@ -27,10 +27,15 @@ def transfer(
     total_timesteps: int = 200_000,
     opponent_update_freq: int = 25_000,
     obs_mode: str = "canonical",
+    n_steps: int = 256,
+    batch_size: int = 512,
+    n_envs: int = 8,
+    vec_env: str = "subproc",
     save_dir: Optional[str] = None,
     run_name: Optional[str] = None,
     use_wandb: bool = False,
     verbose: int = 1,
+    checkpoint_freq: int = 25_000,
 ):
     """
     Load a trained model from `source_ckpt`, switch it to play `target_side`,
@@ -39,7 +44,7 @@ def transfer(
     """
     from gym_tafl.envs.configs import ATK, DEF
     from agents.networks import TaflCNN
-    from training.self_play import make_env, SelfPlayCallback, load
+    from training.self_play import make_vec_env, SelfPlayCallback, load
     from sb3_contrib import MaskablePPO
 
     os.chdir(_PROJECT_ROOT)
@@ -48,13 +53,24 @@ def transfer(
     save_dir = Path(save_dir) if save_dir else _PROJECT_ROOT / "checkpoints" / run_name
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    env = make_env(side=target_side, obs_mode=obs_mode)
+    env = make_vec_env(side=target_side, obs_mode=obs_mode, n_envs=n_envs, vec_env=vec_env)
 
-    # Load the source model; the policy weights transfer — only the side label changes
-    model = MaskablePPO.load(source_ckpt, env=env)
+    # Load the source model; the policy weights transfer — only the side label
+    # changes. n_steps/batch_size override whatever the checkpoint was trained
+    # with (n_steps is per env; buffer per update = n_steps * n_envs).
+    model = MaskablePPO.load(source_ckpt, env=env, n_steps=n_steps, batch_size=batch_size)
     print(f"[cross_play] Loaded {source_ckpt} → now playing as {'ATK' if target_side == ATK else 'DEF'}")
 
-    callbacks = [SelfPlayCallback(env, opponent_update_freq=opponent_update_freq, verbose=verbose)]
+    callbacks = [SelfPlayCallback(opponent_update_freq=opponent_update_freq, verbose=verbose)]
+
+    if checkpoint_freq and checkpoint_freq > 0:
+        from stable_baselines3.common.callbacks import CheckpointCallback
+        callbacks.append(CheckpointCallback(
+            save_freq=max(checkpoint_freq // n_envs, 1),  # save_freq counts vec-env steps, not timesteps
+            save_path=str(save_dir),
+            name_prefix="model",
+            verbose=verbose,
+        ))
 
     if use_wandb:
         import wandb
@@ -65,6 +81,7 @@ def transfer(
     model.learn(total_timesteps=total_timesteps, callback=callbacks, reset_num_timesteps=True)
     model.save(str(save_dir / "final_model"))
     print(f"[cross_play] Saved to {save_dir / 'final_model'}")
+    env.close()
     return model
 
 

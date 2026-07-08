@@ -61,8 +61,10 @@ python experiments/run.py mode=eval \
     eval.side=atk
 ```
 
-Checkpoints are written to `checkpoints/<run_name>/final_model.zip`, with TensorBoard logs
-and a CSV metrics log under `checkpoints/<run_name>/logs/`.
+Models are written to `checkpoints/<run_name>/`: interim `model_<steps>_steps.zip` every
+25k timesteps (`training.checkpoint_freq`, `0` disables) so interrupted runs keep their
+latest weights, plus `final_model.zip` on completion. TensorBoard and CSV metric logs go
+to `checkpoints/<run_name>/logs/`.
 
 ### Live diagnostics
 

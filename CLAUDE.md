@@ -43,7 +43,10 @@ python experiments/run.py mode=eval eval.ckpt=<path> eval.side=atk
 python experiments/run.py training.side=def obs_mode=perspective training.use_wandb=true
 ```
 
-Checkpoints save to `checkpoints/<run_name>/final_model.zip`. There are no tests or linter configured.
+Models save to `checkpoints/<run_name>/`: `model_<steps>_steps.zip` every
+`training.checkpoint_freq` timesteps (default 25k, 0 disables — so interrupted runs keep
+their latest weights) plus `final_model.zip` on completion. There are no tests or linter
+configured.
 
 ## Critical gotcha: working directory
 
@@ -80,11 +83,15 @@ gym_tafl (external engine)  →  env/  →  agents/  →  training/  →  experi
 - `agents/networks.py` — SB3 `BaseFeaturesExtractor`s. `TaflCNN` is the default.
   `SharedTaflCNN` routes through ATK/DEF-specific heads by reading the side flag from
   observation channel 5 — it only works with `obs_mode=canonical`.
-- `training/self_play.py` — `SelfPlayCallback` snapshots the current policy every
-  `opponent_update_freq` timesteps and installs it as the env's `opponent_fn` (deep-copied,
-  eval mode). Until the first snapshot the opponent is uniform random. Reach the base env
-  through `.unwrapped` (wrapping is TaflEnv → ActionMasker → Monitor; Gymnasium 1.x does
-  not forward attribute access through wrappers).
+- `training/self_play.py` — rollouts come from `training.n_envs` parallel envs
+  (`SubprocVecEnv` by default, `vec_env=dummy` for in-process debugging; `n_steps` is
+  per env). `SelfPlayCallback` snapshots the current policy every `opponent_update_freq`
+  timesteps into a `PolicyOpponent` (module-level class so it pickles into workers;
+  runs on CPU — batch-1 inference is faster there than the GPU round trip) and installs
+  it via `vec_env.env_method("set_opponent", ...)`. Until the first snapshot the opponent
+  is uniform random. Gymnasium 1.x does not forward attribute access through wrappers
+  (TaflEnv → ActionMasker → Monitor): use `env_method`/`get_attr` (they resolve via
+  `get_wrapper_attr`), never `VecEnv.set_attr`, which only touches the outermost wrapper.
 - `training/diagnostics.py` — `DiagnosticsCallback` regenerates
   `checkpoints/<run>/diagnostics/` every `training.plot_freq` timesteps (0 disables):
   PNG figures plus a live HTML dashboard (`dashboard.html` + `data.json`, template at

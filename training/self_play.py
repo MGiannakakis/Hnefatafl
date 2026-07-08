@@ -4,17 +4,24 @@ Phase 1 self-play training.
 Trains a single side (ATK or DEF) using MaskablePPO with a self-play opponent.
 Every `opponent_update_freq` timesteps, the current policy is snapshotted and
 used as the new opponent, replacing the previous one.
+
+Rollouts are collected from `n_envs` parallel environments (SubprocVecEnv by
+default). The opponent snapshot runs on CPU inside each env: batch-1 inference
+of a net this small is faster on CPU than the GPU round trip, it parallelizes
+across worker processes, and a CPU policy is picklable into subprocess workers.
 """
 
-import os
 import copy
+import os
+from functools import partial
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import torch
-from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
+from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 from sb3_contrib import MaskablePPO
 from sb3_contrib.common.wrappers import ActionMasker
 
@@ -25,14 +32,45 @@ def _get_action_mask(env):
     return env.action_masks()
 
 
-class SelfPlayCallback(BaseCallback):
+class PolicyOpponent:
     """
-    Snapshots the current policy as the new opponent at regular intervals.
+    Frozen policy snapshot acting as the in-env opponent, on CPU.
+
+    Defined at module level so VecEnv.env_method can pickle instances into
+    SubprocVecEnv workers (a closure cannot be pickled through the pipe).
     """
 
-    def __init__(self, train_env, opponent_update_freq: int = 50_000, verbose: int = 0):
+    def __init__(self, policy, side: int, obs_mode: str):
+        policy = policy.to("cpu")
+        policy.set_training_mode(False)
+        self.policy = policy
+        self.side = side
+        self.obs_mode = obs_mode
+        self.n_actions = int(policy.action_space.n)
+
+    def __call__(self, board: np.ndarray, valid_actions: list) -> int:
+        from env.observations import encode_observation
+        obs = encode_observation(board, self.side, self.obs_mode)
+        obs_t = torch.as_tensor(obs).unsqueeze(0)
+        mask = np.zeros(self.n_actions, dtype=bool)
+        mask[valid_actions] = True
+        mask_t = torch.as_tensor(mask).unsqueeze(0)
+        with torch.no_grad():
+            action, _, _ = self.policy(obs_t, action_masks=mask_t)
+        action = int(action.item())
+        if action not in valid_actions:
+            action = valid_actions[np.random.randint(len(valid_actions))]
+        return action
+
+
+class SelfPlayCallback(BaseCallback):
+    """
+    Snapshots the current policy as the new opponent at regular intervals,
+    installing it into every env of the training VecEnv.
+    """
+
+    def __init__(self, opponent_update_freq: int = 50_000, verbose: int = 0):
         super().__init__(verbose)
-        self.train_env = train_env
         self.opponent_update_freq = opponent_update_freq
         self._last_update = 0
 
@@ -43,38 +81,39 @@ class SelfPlayCallback(BaseCallback):
         return True
 
     def _snapshot_opponent(self):
-        policy = copy.deepcopy(self.model.policy)
-        policy.set_training_mode(False)
-        base_env = self.train_env.unwrapped  # walk Monitor -> ActionMasker -> TaflEnv
-        env_side = base_env.side
-        env_obs_mode = base_env.obs_mode
-
-        def opponent_fn(board, valid_actions):
-            from env.observations import encode_observation
-            obs = encode_observation(board, env_side, env_obs_mode)
-            obs_t = torch.FloatTensor(obs).unsqueeze(0).to(self.model.device)
-            mask = np.zeros(self.model.action_space.n, dtype=bool)
-            for a in valid_actions:
-                mask[a] = True
-            mask_t = torch.BoolTensor(mask).unsqueeze(0).to(self.model.device)
-            with torch.no_grad():
-                action, _, _ = policy(obs_t, action_masks=mask_t)
-            action = int(action.item())
-            if action not in valid_actions:
-                action = valid_actions[np.random.randint(len(valid_actions))]
-            return action
-
-        base_env.opponent_fn = opponent_fn
+        vec_env = self.model.get_env()
+        side = vec_env.get_attr("side")[0]
+        obs_mode = vec_env.get_attr("obs_mode")[0]
+        opponent = PolicyOpponent(copy.deepcopy(self.model.policy), side=side, obs_mode=obs_mode)
+        vec_env.env_method("set_opponent", opponent)
         if self.verbose:
             print(f"[SelfPlay] Opponent updated at step {self.num_timesteps}")
 
 
-def make_env(side: int, obs_mode: str, opponent_fn=None):
+def make_env(side: int, obs_mode: str, opponent_fn=None, torch_threads: Optional[int] = None):
+    if torch_threads is not None:
+        torch.set_num_threads(torch_threads)
     from env.tafl_wrapper import TaflEnv
     env = TaflEnv(side=side, opponent_fn=opponent_fn, obs_mode=obs_mode)
     env = ActionMasker(env, _get_action_mask)
     env = Monitor(env)
     return env
+
+
+def make_vec_env(side: int, obs_mode: str, n_envs: int = 8, vec_env: str = "subproc"):
+    """
+    Vectorize `n_envs` TaflEnvs. "subproc" steps envs (and their CPU opponents)
+    in parallel across processes; "dummy" steps them serially in-process but
+    still batches the agent's GPU forward across envs.
+    """
+    if vec_env == "subproc" and n_envs > 1:
+        # One torch thread per worker: n_envs single-board inferences in
+        # parallel beat n_envs processes each fighting over every core.
+        fns = [partial(make_env, side=side, obs_mode=obs_mode, torch_threads=1)
+               for _ in range(n_envs)]
+        return SubprocVecEnv(fns)
+    fns = [partial(make_env, side=side, obs_mode=obs_mode) for _ in range(n_envs)]
+    return DummyVecEnv(fns)
 
 
 def train(
@@ -84,15 +123,18 @@ def train(
     obs_mode: str = "canonical",
     features_dim: int = 256,
     learning_rate: float = 3e-4,
-    n_steps: int = 2048,
-    batch_size: int = 64,
+    n_steps: int = 256,
+    batch_size: int = 512,
     n_epochs: int = 10,
+    n_envs: int = 8,
+    vec_env: str = "subproc",
     save_dir: Optional[str] = None,
     run_name: Optional[str] = None,
     use_wandb: bool = False,
     verbose: int = 1,
-    plot_freq: int = 2048,
+    plot_freq: int = 10_000,
     dashboard_port: int = 8787,
+    checkpoint_freq: int = 25_000,
 ):
     from gym_tafl.envs.configs import ATK
     from agents.networks import TaflCNN
@@ -103,7 +145,7 @@ def train(
     save_dir = Path(save_dir) if save_dir else _PROJECT_ROOT / "checkpoints" / run_name
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    env = make_env(side=side, obs_mode=obs_mode)
+    env = make_vec_env(side=side, obs_mode=obs_mode, n_envs=n_envs, vec_env=vec_env)
 
     policy_kwargs = {
         "features_extractor_class": TaflCNN,
@@ -115,7 +157,7 @@ def train(
         env,
         policy_kwargs=policy_kwargs,
         learning_rate=learning_rate,
-        n_steps=n_steps,
+        n_steps=n_steps,  # per env: buffer per update = n_steps * n_envs
         batch_size=batch_size,
         n_epochs=n_epochs,
         gamma=0.99,
@@ -123,7 +165,15 @@ def train(
         tensorboard_log=str(save_dir / "tb_logs") if verbose else None,
     )
 
-    callbacks = [SelfPlayCallback(env, opponent_update_freq=opponent_update_freq, verbose=verbose)]
+    callbacks = [SelfPlayCallback(opponent_update_freq=opponent_update_freq, verbose=verbose)]
+
+    if checkpoint_freq and checkpoint_freq > 0:
+        callbacks.append(CheckpointCallback(
+            save_freq=max(checkpoint_freq // n_envs, 1),  # save_freq counts vec-env steps, not timesteps
+            save_path=str(save_dir),
+            name_prefix="model",
+            verbose=verbose,
+        ))
 
     if plot_freq and plot_freq > 0:
         from stable_baselines3.common.logger import configure
@@ -153,6 +203,7 @@ def train(
     model.learn(total_timesteps=total_timesteps, callback=callbacks)
     model.save(str(save_dir / "final_model"))
     print(f"[train] Saved to {save_dir / 'final_model'}")
+    env.close()
     return model
 
 
