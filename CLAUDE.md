@@ -14,11 +14,15 @@ The game engine itself is NOT in this repo — it comes from the external `gym_t
 
 ## Commands
 
-Uses the `hnefatafl` conda environment:
+Uses the project-local venv at `.venv` (Python 3.10; the requirements.txt header
+mentioning a conda env is historical):
 
-```bash
-conda activate hnefatafl
-pip install -r requirements.txt   # torch installed separately (CPU or CUDA build)
+```powershell
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+# GPU torch (RTX 3080): the plain PyPI wheel is CPU-only — replace it with
+.venv\Scripts\python.exe -m pip uninstall -y torch
+.venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cu128
+# (cu128 is the newest CUDA wheel line for Python 3.10; torch >= 2.12 needs Python 3.11+)
 ```
 
 All experiments go through the Hydra entry point (config: `experiments/configs/default.yaml`):
@@ -82,9 +86,13 @@ gym_tafl (external engine)  →  env/  →  agents/  →  training/  →  experi
   through `.unwrapped` (wrapping is TaflEnv → ActionMasker → Monitor; Gymnasium 1.x does
   not forward attribute access through wrappers).
 - `training/diagnostics.py` — `DiagnosticsCallback` regenerates
-  `checkpoints/<run>/diagnostics/{dashboard,recent_games}.png` every `training.plot_freq`
-  timesteps (0 disables), reading losses from the CSV logger set up in `train()` and final
-  boards from the `final_board` key `TaflEnv` puts in `info` at episode end.
+  `checkpoints/<run>/diagnostics/` every `training.plot_freq` timesteps (0 disables):
+  PNG figures plus a live HTML dashboard (`dashboard.html` + `data.json`, template at
+  `training/dashboard_template.html`) served on `http://127.0.0.1:<training.dashboard_port>`
+  by a daemon thread. Metrics come from the CSV logger set up in `train()`; final boards
+  from the `final_board` key `TaflEnv` puts in `info` at episode end. The template is
+  UTF-8 — regenerate/edit it only with tools that read and write UTF-8 explicitly
+  (PowerShell 5.1 defaults will mojibake it).
 - `training/cross_play.py` — loads a checkpoint, swaps the env side, fine-tunes with
   self-play; `zero_shot_eval()` measures transfer without fine-tuning.
 - `experiments/run.py` — dispatches `mode=train|cross_play|eval` to the above; the only CLI.

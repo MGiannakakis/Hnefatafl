@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hnefatafl — training log</title>
+<style>
+  :root{
+    --bg:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+    --grid:#e1e0d9; --baseline:#c3c2b7; --series:#2a78d6; --series-ghost:rgba(42,120,214,.22);
+    --border:rgba(11,11,11,.10); --good:#0ca30c; --warn:#fab219; --bad:#d03b3b;
+    --chip:#f0efec;
+  }
+  [data-theme="dark"]{
+    --bg:#0d0d0d; --surface:#1a1a19; --ink:#ffffff; --ink2:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --baseline:#383835; --series:#3987e5; --series-ghost:rgba(57,135,229,.28);
+    --border:rgba(255,255,255,.10); --chip:#242423;
+  }
+  *{box-sizing:border-box; margin:0}
+  html{background:var(--bg)}
+  body{
+    font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;
+    color:var(--ink); background:
+      radial-gradient(1200px 400px at 20% -10%, rgba(42,120,214,.05), transparent 60%),
+      var(--bg);
+    padding:28px clamp(16px,4vw,48px) 64px;
+  }
+  a{color:var(--series)}
+  /* ---------- masthead ---------- */
+  header{display:flex; flex-wrap:wrap; align-items:baseline; gap:12px 18px; margin-bottom:6px}
+  h1{
+    font-family:Georgia,'Iowan Old Style','Times New Roman',serif;
+    font-size:clamp(22px,3vw,30px); font-weight:600; letter-spacing:.01em;
+  }
+  h1 .rune{color:var(--series); font-weight:400}
+  #status{display:inline-flex; align-items:center; gap:7px; font-size:12px; color:var(--ink2);
+    border:1px solid var(--border); border-radius:999px; padding:3px 12px; background:var(--surface)}
+  #status .dot{width:8px; height:8px; border-radius:50%; background:var(--muted)}
+  #status.live .dot{background:var(--good); animation:pulse 2s infinite}
+  #status.stale .dot{background:var(--warn)}
+  #status.snapshot .dot{background:var(--muted)}
+  @keyframes pulse{0%,100%{opacity:1} 50%{opacity:.35}}
+  #meta{display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 4px}
+  .chip{font-size:12px; color:var(--ink2); background:var(--chip); border:1px solid var(--border);
+    border-radius:999px; padding:3px 12px}
+  .chip b{color:var(--ink); font-weight:600}
+  /* ---------- progress ---------- */
+  #progress{height:5px; background:var(--grid); border-radius:3px; overflow:hidden; margin:14px 0 4px}
+  #progress i{display:block; height:100%; width:0%; background:var(--series); border-radius:3px;
+    transition:width .8s ease}
+  #progressLabel{font-size:12px; color:var(--muted); margin-bottom:18px}
+  /* ---------- controls ---------- */
+  #controls{display:flex; flex-wrap:wrap; align-items:center; gap:18px; margin:6px 0 20px;
+    padding:10px 14px; background:var(--surface); border:1px solid var(--border); border-radius:10px}
+  #controls label{font-size:12px; color:var(--ink2); display:inline-flex; align-items:center; gap:8px}
+  #controls input[type=range]{width:140px; accent-color:var(--series)}
+  #controls button{font:inherit; font-size:12px; color:var(--ink2); background:var(--chip);
+    border:1px solid var(--border); border-radius:999px; padding:3px 14px; cursor:pointer}
+  #controls button:hover{color:var(--ink)}
+  .hint{font-size:12px; color:var(--muted)}
+  /* ---------- help ---------- */
+  details.help{background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:12px 16px; margin-bottom:20px}
+  details.help summary{cursor:pointer; font-weight:600; color:var(--ink2); font-size:13px}
+  details.help[open] summary{margin-bottom:8px}
+  details.help p{font-size:13px; color:var(--ink2); margin:6px 0; max-width:86ch}
+  details.help b{color:var(--ink)}
+  /* ---------- sections ---------- */
+  h2{font-family:Georgia,'Iowan Old Style',serif; font-size:19px; font-weight:600;
+    margin:30px 0 14px; display:flex; align-items:center; gap:10px}
+  h2::after{content:""; flex:1; height:1px; background:var(--grid)}
+  /* ---------- chart cards ---------- */
+  #charts{display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:14px}
+  .card{background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:12px 14px 8px; min-width:0}
+  .card .head{display:flex; align-items:baseline; gap:8px; margin-bottom:2px}
+  .card .title{font-size:13px; font-weight:600; color:var(--ink2)}
+  .card .val{margin-left:auto; font-size:13px; font-weight:600; color:var(--ink);
+    font-variant-numeric:tabular-nums}
+  .card details{font-size:12px; color:var(--ink2); margin:2px 0 6px}
+  .card details summary{cursor:pointer; color:var(--muted); font-size:11px; list-style:none}
+  .card details summary::before{content:"ⓘ how to read"}
+  .card details[open] summary::before{content:"ⓘ hide"}
+  .card details p{margin:6px 0 4px; max-width:60ch}
+  .card svg{display:block; width:100%; height:auto}
+  .empty{color:var(--muted); font-size:12px; padding:40px 0 56px; text-align:center}
+  /* chart internals (SVG classes) */
+  .gline{stroke:var(--grid); stroke-width:1}
+  .axis{stroke:var(--baseline); stroke-width:1}
+  .tick{fill:var(--muted); font-size:10px}
+  .line{stroke:var(--series); stroke-width:2; fill:none; stroke-linejoin:round}
+  .ghost{stroke:var(--series-ghost); stroke-width:1.5; fill:none}
+  .xhair{stroke:var(--baseline); stroke-width:1; stroke-dasharray:3 3; display:none}
+  .dotm{fill:var(--series); stroke:var(--surface); stroke-width:2; display:none}
+  /* ---------- games ---------- */
+  #games{display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:14px}
+  .game{background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:10px}
+  .game .cap{font-size:12px; color:var(--ink2); margin-top:8px; display:flex; align-items:center; gap:6px}
+  .game .cap .w{width:9px; height:9px; border-radius:50%; flex:none; border:1px solid var(--baseline)}
+  .game .cap .step{margin-left:auto; color:var(--muted); font-variant-numeric:tabular-nums}
+  .game svg{display:block; width:100%; height:auto; border-radius:6px}
+  /* ---------- tooltip ---------- */
+  #tooltip{position:fixed; display:none; pointer-events:none; z-index:10;
+    background:var(--surface); color:var(--ink); border:1px solid var(--border); border-radius:8px;
+    box-shadow:0 4px 18px rgba(0,0,0,.14); padding:6px 10px; font-size:12px;
+    font-variant-numeric:tabular-nums}
+  #tooltip .k{color:var(--muted)}
+  footer{margin-top:40px; font-size:12px; color:var(--muted)}
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span class="rune">᛫</span> Hnefatafl <span class="rune">᛫</span> training log</h1>
+  <span id="status"><span class="dot"></span><span id="statusText">connecting…</span></span>
+</header>
+<div id="meta"></div>
+<div id="progress"><i></i></div>
+<div id="progressLabel"></div>
+
+<div id="controls">
+  <label>smoothing <input id="smooth" type="range" min="0" max="0.95" step="0.05" value="0">
+    <span id="smoothVal">off</span></label>
+  <button id="themeBtn">theme</button>
+  <span class="hint">hover charts for values · raw curve shows faint when smoothing is on · updates every 5 s</span>
+</div>
+
+<details class="help">
+  <summary>How to read this dashboard</summary>
+  <p><b>Cadence.</b> The training callback rewrites the data after every PPO update
+  (every <b>plot_freq</b> timesteps, default 2048). The page polls it every 5 seconds — leave it open.
+  All x-axes are environment timesteps (the learning agent's moves only).</p>
+  <p><b>Self-play distorts naïve reading.</b> Two things lie to you here: (1) <b>episode reward is
+  inflated by shaping</b> — the engine grants small per-move rewards (captures, progress), so the agent
+  can post positive reward while losing every game; (2) <b>the opponent is a moving target</b> — every
+  <b>opponent_update_freq</b> steps the current policy is snapshotted in as the new opponent, so reward and
+  losses can legitimately dip right after each swap while the agent is actually improving. Judge trends
+  between swaps, not absolute levels.</p>
+  <p><b>Health at a glance.</b> Explained variance climbing toward 1 and approx-KL / clip-fraction in
+  their healthy bands (≈0.01–0.05 and ≈0.1–0.3) mean stable learning. Then look at the boards below to
+  see <b>what</b> is being learned — curves can look perfect while every game ends the same degenerate way.</p>
+</details>
+
+<h2>Optimization</h2>
+<div id="charts"></div>
+
+<h2>Recent games</h2>
+<details class="help">
+  <summary>How to read the boards</summary>
+  <p>Final position of the most recent completed training episodes, newest first. <b>Dark discs</b> are
+  attackers, <b>light discs</b> are defenders, the <b>gold K</b> is the king; the shaded centre square is
+  the throne. The caption gives the winner and the engine's termination reason.</p>
+  <p>Termination reasons are your win-rate proxy: training ATK, progress looks like "King escaped"
+  captions giving way to "King captured". The king's final square shows which escape lanes are left open;
+  thinning defender counts with "King escaped" means the attacker trades well but never blockades —
+  a shaping-reward exploit worth catching. Draw pile-ups ("moves limit", "threefold repetition") late in
+  training mean the self-play equilibrium is degenerating into mutual avoidance, not success.</p>
+</details>
+<div id="games"></div>
+
+<footer>Files: <code>data.json</code> (metrics + boards) · <code>dashboard.png</code>, <code>recent_games.png</code>
+(static exports) · raw log in <code>../logs/progress.csv</code></footer>
+
+<div id="tooltip"></div>
+
+<script>
+"use strict";
+let DATA = /*__DATA__*/null;
+let LIVE = false, SMOOTH = 0;
+
+const PANEL_HELP = {
+  "rollout/ep_rew_mean":
+    "Mean total reward per episode (rolling ~100 episodes): engine shaping (captures, progress) plus terminal reward, with a hard -1 when the opponent ends the game. Shaping inflates it and opponent snapshots move the goalposts, so read the trend between swaps. A collapse that never recovers is a real instability signal.",
+  "rollout/ep_len_mean":
+    "Mean moves per episode, agent's perspective. Training ATK: shortening episodes with rising reward = faster kills; lengthening = the defender survives longer. Drift toward the move cap together with draw boards below means both sides are stalling.",
+  "train/value_loss":
+    "Critic MSE against observed returns. Should start high and decay; expect a spike after every opponent snapshot (the sawtooth is healthy self-play). Persistent growth means the critic can't keep up — lower the learning rate or accept slower opponent swaps.",
+  "train/policy_gradient_loss":
+    "The clipped PPO surrogate. Its level is NOT a quality measure — it hovers near zero by construction. Only watch for sudden large-magnitude jumps together with a KL spike.",
+  "train/entropy_loss":
+    "Negative policy entropy; more negative = more random. With masking, a fresh policy starts near -ln(legal moves) = about -4.4 here. Expect a slow climb toward 0. A fast collapse is premature convergence (raise ent_coef); flat forever usually means the critic is failing (check explained variance).",
+  "train/approx_kl":
+    "How big a step each update actually took (KL old vs new policy). Healthy: about 0.01-0.05. Persistently above ~0.1 destabilizes self-play - lower learning_rate or n_epochs. Read together with clip fraction.",
+  "train/clip_fraction":
+    "Fraction of samples clipped at PPO's ±0.2 ratio limit — how often the optimizer wanted to move further than allowed. Typical healthy range 0.1-0.3. Sitting near 0.5 means the policy is being yanked hard every update: same remedies as high KL.",
+  "train/explained_variance":
+    "How much of the return the critic explains: 1 = perfect, 0 = useless, negative = harmful. Arguably the most important health panel - PPO's advantages are only as good as the critic. Want a climb toward 0.6-0.9; stuck at 0 or negative means the policy is learning from noise."
+};
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;");
+
+function fmtStep(v){
+  if(v >= 1e6) return (v/1e6).toFixed(v >= 1e7 ? 0 : 1) + "M";
+  if(v >= 1e3) return (v/1e3).toFixed(v >= 1e5 ? 0 : 1).replace(/\.0$/,"") + "k";
+  return String(Math.round(v));
+}
+function fmtVal(v){
+  if(!isFinite(v)) return "–";
+  const a = Math.abs(v);
+  if(a >= 1000) return v.toFixed(0);
+  if(a >= 10)   return v.toFixed(2);
+  if(a >= 0.01 || a === 0) return v.toFixed(3);
+  return v.toExponential(1);
+}
+function niceTicks(lo, hi, n){
+  if(!(hi > lo)){ lo -= 1; hi += 1; }
+  const step0 = (hi - lo) / Math.max(1, n);
+  const mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const norm = step0 / mag;
+  const step = (norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10) * mag;
+  const out = [];
+  for(let v = Math.ceil(lo/step)*step; v <= hi + step*1e-6; v += step) out.push(v);
+  return out;
+}
+function ema(y, a){
+  if(a <= 0) return y;
+  const out = new Array(y.length);
+  let s = y[0];
+  for(let i = 0; i < y.length; i++){ s = a*s + (1-a)*y[i]; out[i] = s; }
+  return out;
+}
+
+/* ---------------- charts ---------------- */
+
+function renderChart(body, key){
+  const m = DATA.metrics[key];
+  if(!m || !m.x || m.x.length === 0){
+    body.innerHTML = '<div class="empty">waiting for first log dump…</div>';
+    return;
+  }
+  const xs = m.x, raw = m.y, ys = ema(raw, SMOOTH);
+  const w = Math.max(body.clientWidth, 280), h = 185, L = 52, R = 12, T = 10, B = 24;
+  let lo = Infinity, hi = -Infinity;
+  for(const v of ys){ if(v < lo) lo = v; if(v > hi) hi = v; }
+  if(SMOOTH > 0) for(const v of raw){ if(v < lo) lo = v; if(v > hi) hi = v; }
+  if(!(hi > lo)){ lo -= Math.abs(lo)*0.1 + 1e-3; hi += Math.abs(hi)*0.1 + 1e-3; }
+  const pad = (hi - lo) * 0.06; lo -= pad; hi += pad;
+  const x0 = xs[0], x1 = xs[xs.length-1] > x0 ? xs[xs.length-1] : x0 + 1;
+  const X = v => L + (v - x0) / (x1 - x0) * (w - L - R);
+  const Y = v => T + (hi - v) / (hi - lo) * (h - T - B);
+
+  let s = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" data-key="${esc(key)}">`;
+  for(const t of niceTicks(lo, hi, 4)){
+    if(t < lo || t > hi) continue;
+    s += `<line class="gline" x1="${L}" x2="${w-R}" y1="${Y(t)}" y2="${Y(t)}"/>`;
+    s += `<text class="tick" x="${L-6}" y="${Y(t)+3}" text-anchor="end">${fmtVal(t)}</text>`;
+  }
+  let lastLbl = null;
+  for(const t of niceTicks(x0, x1, 4)){
+    if(t < x0 || t > x1) continue;
+    const lbl = fmtStep(t);
+    if(lbl === lastLbl) continue;   // degenerate ranges format to identical labels
+    lastLbl = lbl;
+    s += `<text class="tick" x="${X(t)}" y="${h-8}" text-anchor="middle">${lbl}</text>`;
+  }
+  s += `<line class="axis" x1="${L}" x2="${w-R}" y1="${h-B}" y2="${h-B}"/>`;
+  const path = arr => arr.map((v,i) => (i ? "L" : "M") + X(xs[i]).toFixed(1) + " " + Y(v).toFixed(1)).join(" ");
+  if(SMOOTH > 0) s += `<path class="ghost" d="${path(raw)}"/>`;
+  if(xs.length === 1){
+    s += `<circle class="line" cx="${X(xs[0])}" cy="${Y(ys[0])}" r="3" fill="var(--series)"/>`;
+  } else {
+    s += `<path class="line" d="${path(ys)}"/>`;
+  }
+  s += `<line class="xhair" y1="${T}" y2="${h-B}" x1="0" x2="0"/>`;
+  s += `<circle class="dotm" r="4"/>`;
+  s += `</svg>`;
+  body.innerHTML = s;
+
+  const svg = body.firstChild, xh = svg.querySelector(".xhair"), dm = svg.querySelector(".dotm");
+  const tip = $("#tooltip");
+  svg.addEventListener("mousemove", ev => {
+    const r = svg.getBoundingClientRect();
+    const px = (ev.clientX - r.left) / r.width * w;
+    const vx = x0 + (px - L) / (w - L - R) * (x1 - x0);
+    let best = 0, bd = Infinity;
+    for(let i = 0; i < xs.length; i++){
+      const d = Math.abs(xs[i] - vx);
+      if(d < bd){ bd = d; best = i; }
+    }
+    const cx = X(xs[best]);
+    xh.setAttribute("x1", cx); xh.setAttribute("x2", cx); xh.style.display = "block";
+    dm.setAttribute("cx", cx); dm.setAttribute("cy", Y(ys[best])); dm.style.display = "block";
+    tip.style.display = "block";
+    tip.style.left = Math.min(ev.clientX + 14, innerWidth - 170) + "px";
+    tip.style.top = (ev.clientY + 14) + "px";
+    tip.innerHTML = `<span class="k">step</span> ${xs[best].toLocaleString()}<br>` +
+      `<span class="k">value</span> ${fmtVal(raw[best])}` +
+      (SMOOTH > 0 ? `<br><span class="k">smoothed</span> ${fmtVal(ys[best])}` : "");
+  });
+  svg.addEventListener("mouseleave", () => {
+    xh.style.display = "none"; dm.style.display = "none"; tip.style.display = "none";
+  });
+}
+
+function buildCards(){
+  const root = $("#charts");
+  root.innerHTML = "";
+  for(const p of DATA.panels){
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML =
+      `<div class="head"><span class="title">${esc(p.title)}</span><span class="val" data-val></span></div>` +
+      `<details><summary></summary><p>${esc(PANEL_HELP[p.key] || "")}</p></details>` +
+      `<div class="body" data-body></div>`;
+    card.dataset.key = p.key;
+    root.appendChild(card);
+  }
+}
+
+function renderCharts(){
+  for(const card of document.querySelectorAll("#charts .card")){
+    const key = card.dataset.key;
+    renderChart(card.querySelector("[data-body]"), key);
+    const m = DATA.metrics[key];
+    card.querySelector("[data-val]").textContent =
+      m && m.y && m.y.length ? fmtVal(m.y[m.y.length-1]) : "";
+  }
+}
+
+/* ---------------- boards ---------------- */
+
+function boardSVG(b){
+  const t = DATA.tiles, n = b.length, cs = 20, W = n * cs;
+  // boards render as fixed light "game media" regardless of page theme
+  let s = `<svg viewBox="-1 -1 ${W+2} ${W+2}"><rect x="-1" y="-1" width="${W+2}" height="${W+2}" fill="#faf9f4" stroke="#c9c7bd"/>`;
+  for(let r = 0; r < n; r++)
+    for(let c = 0; c < n; c++)
+      if(b[r][c] === t.throne || b[r][c] === t.corner)
+        s += `<rect x="${c*cs}" y="${r*cs}" width="${cs}" height="${cs}" fill="#e9e6da"/>`;
+  for(let i = 0; i <= n; i++){
+    s += `<line x1="${i*cs}" y1="0" x2="${i*cs}" y2="${W}" stroke="#dedcd2" stroke-width="1"/>`;
+    s += `<line y1="${i*cs}" x1="0" y2="${i*cs}" x2="${W}" stroke="#dedcd2" stroke-width="1"/>`;
+  }
+  for(let r = 0; r < n; r++)
+    for(let c = 0; c < n; c++){
+      const v = b[r][c], x = c*cs + cs/2, y = r*cs + cs/2;
+      if(v === t.attacker) s += `<circle cx="${x}" cy="${y}" r="7" fill="#2b2b2b" stroke="#6f6d66"/>`;
+      else if(v === t.defender) s += `<circle cx="${x}" cy="${y}" r="7" fill="#ffffff" stroke="#2b2b2b"/>`;
+      else if(v === t.king) s += `<circle cx="${x}" cy="${y}" r="8" fill="#eda100" stroke="#1a1a19"/>` +
+        `<text x="${x}" y="${y+3.5}" text-anchor="middle" font-size="9" font-weight="bold" fill="#1a1a19">K</text>`;
+    }
+  return s + `</svg>`;
+}
+
+function renderGames(){
+  const root = $("#games"), P = DATA.players;
+  if(!DATA.games || DATA.games.length === 0){
+    root.innerHTML = '<div class="empty">no completed episodes yet…</div>';
+    return;
+  }
+  root.innerHTML = "";
+  const games = DATA.games.slice().reverse();
+  for(const g of games){
+    const who = g.winner === P.atk ? ["ATK wins", "#2b2b2b"]
+              : g.winner === P.def ? ["DEF wins", "#ffffff"]
+              : g.winner === P.draw ? ["Draw", "#b3b1a7"] : ["Ended", "#b3b1a7"];
+    const el = document.createElement("div");
+    el.className = "game";
+    el.innerHTML = boardSVG(g.board) +
+      `<div class="cap"><span class="w" style="background:${who[1]}"></span>` +
+      `<span><b>${who[0]}</b> — ${esc(g.reason)}</span>` +
+      `<span class="step">${g.step.toLocaleString()}</span></div>`;
+    root.appendChild(el);
+  }
+}
+
+/* ---------------- header / status ---------------- */
+
+function renderMeta(){
+  const m = DATA.meta || {};
+  const chips = [];
+  if(m.run_name) chips.push(`run <b>${esc(m.run_name)}</b>`);
+  if(m.side) chips.push(`side <b>${esc(m.side)}</b>`);
+  if(m.obs_mode) chips.push(`obs <b>${esc(m.obs_mode)}</b>`);
+  chips.push(`steps <b>${(m.num_timesteps||0).toLocaleString()}</b>`);
+  $("#meta").innerHTML = chips.map(c => `<span class="chip">${c}</span>`).join("");
+  if(m.total_timesteps){
+    const pct = Math.min(100, 100 * (m.num_timesteps||0) / m.total_timesteps);
+    $("#progress i").style.width = pct + "%";
+    $("#progressLabel").textContent =
+      `${pct.toFixed(1)}% of ${m.total_timesteps.toLocaleString()} timesteps`;
+  }
+}
+
+function renderStatus(){
+  const el = $("#status"), txt = $("#statusText");
+  if(!DATA){ el.className = ""; txt.textContent = "no data"; return; }
+  const age = DATA.meta && DATA.meta.updated_at ? (Date.now()/1000 - DATA.meta.updated_at) : 0;
+  if(!LIVE){ el.className = "snapshot"; txt.textContent = "snapshot (no server — start training or serve this folder)"; }
+  else if(age > 600){ el.className = "stale"; txt.textContent = `stale — last update ${Math.round(age/60)} min ago`; }
+  else { el.className = "live"; txt.textContent = `live — updated ${age < 5 ? "just now" : Math.round(age) + " s ago"}`; }
+}
+
+function renderAll(){
+  if(!DATA) { renderStatus(); return; }
+  renderMeta(); renderStatus(); renderCharts(); renderGames();
+}
+
+/* ---------------- wiring ---------------- */
+
+async function poll(){
+  try{
+    const r = await fetch("data.json", {cache: "no-store"});
+    if(!r.ok) throw new Error(r.status);
+    DATA = await r.json();
+    if(!document.querySelector("#charts .card")) buildCards();
+    LIVE = true;
+    renderAll();
+  }catch(e){
+    LIVE = false;
+    renderStatus();
+  }
+  setTimeout(poll, 5000);
+}
+
+$("#smooth").addEventListener("input", ev => {
+  SMOOTH = +ev.target.value;
+  $("#smoothVal").textContent = SMOOTH > 0 ? SMOOTH.toFixed(2) : "off";
+  if(DATA) renderCharts();
+});
+
+$("#themeBtn").addEventListener("click", () => {
+  const cur = document.documentElement.dataset.theme ||
+    (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const next = cur === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try{ localStorage.setItem("tafl-theme", next); }catch(e){}
+});
+try{
+  const saved = localStorage.getItem("tafl-theme");
+  if(saved) document.documentElement.dataset.theme = saved;
+  else if(matchMedia("(prefers-color-scheme: dark)").matches) document.documentElement.dataset.theme = "dark";
+}catch(e){}
+
+let rsz;
+addEventListener("resize", () => { clearTimeout(rsz); rsz = setTimeout(() => { if(DATA) renderCharts(); }, 200); });
+setInterval(renderStatus, 1000);
+
+if(DATA) { buildCards(); renderAll(); }
+poll();
+</script>
+</body>
+</html>

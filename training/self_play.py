@@ -92,6 +92,7 @@ def train(
     use_wandb: bool = False,
     verbose: int = 1,
     plot_freq: int = 2048,
+    dashboard_port: int = 8787,
 ):
     from gym_tafl.envs.configs import ATK
     from agents.networks import TaflCNN
@@ -133,6 +134,13 @@ def train(
             log_dir=log_dir,
             out_dir=save_dir / "diagnostics",
             plot_freq=plot_freq,
+            dashboard_port=dashboard_port,
+            run_info={
+                "run_name": run_name,
+                "side": side_name.upper(),
+                "obs_mode": obs_mode,
+                "total_timesteps": total_timesteps,
+            },
             verbose=verbose,
         ))
 

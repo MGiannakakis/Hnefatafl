@@ -20,6 +20,7 @@ training:
   use_wandb: false
   verbose: 1
   plot_freq: 2048          # regenerate diagnostic figures every N timesteps; 0 disables
+  dashboard_port: 8787     # localhost port for the live HTML dashboard; 0 disables the server
 
 cross_play:
   source_ckpt: null        # path to trained model; required for cross-play mode

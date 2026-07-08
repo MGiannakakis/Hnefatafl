@@ -20,12 +20,22 @@ it in a Gymnasium single-agent env with action masking and adds the training/eva
 
 ## Setup
 
-```bash
-conda create -n hnefatafl python=3.10
-conda activate hnefatafl
-pip install torch          # pick the CPU or CUDA build for your machine
-pip install -r requirements.txt
+Create a Python 3.10 virtual environment and install the requirements:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
+
+The default PyPI torch wheel is CPU-only. For an NVIDIA GPU, swap in the CUDA build:
+
+```powershell
+.venv\Scripts\python.exe -m pip uninstall -y torch
+.venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cu128
+```
+
+(cu128 is the newest CUDA wheel line published for Python 3.10; torch ≥ 2.12 requires
+Python 3.11+.)
 
 ## Usage
 
@@ -56,16 +66,19 @@ and a CSV metrics log under `checkpoints/<run_name>/logs/`.
 
 ### Live diagnostics
 
-During training, two figures are regenerated in place every PPO update (default; tune with
-`training.plot_freq=<timesteps>`, `0` disables) under `checkpoints/<run_name>/diagnostics/`:
+Training serves an interactive dashboard at **http://127.0.0.1:8787/dashboard.html**
+(port via `training.dashboard_port`, `0` disables the server). It auto-refreshes every
+5 s and shows loss curves, PPO health metrics (approx KL, clip fraction, explained
+variance), episode stats, and the final boards of recent self-play games — with a
+"how to read" explainer on every panel, an EMA smoothing slider, hover tooltips, and
+a light/dark theme toggle.
 
-- `dashboard.png` — episode reward/length, value/policy/entropy losses, approx KL,
-  clip fraction, explained variance vs. timesteps
-- `recent_games.png` — final boards of the last six completed training episodes with
-  winner and end reason
+Everything is refreshed every PPO update (tune with `training.plot_freq=<timesteps>`,
+`0` disables) under `checkpoints/<run_name>/diagnostics/`:
 
-Keep them open in an image viewer that auto-reloads (or refresh manually) to watch
-training progress.
+- `dashboard.html` + `data.json` — the live dashboard; the latest data is also embedded
+  into the HTML, so opening the file directly after training shows the final snapshot
+- `dashboard.png` / `recent_games.png` — static exports of the same content
 
 ## Project layout
 

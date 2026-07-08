@@ -1,23 +1,37 @@
 """
 Live training diagnostics.
 
-DiagnosticsCallback regenerates PNG figures every `plot_freq` timesteps
-(overwriting in place, so you can keep the files open and refresh):
+DiagnosticsCallback regenerates diagnostics every `plot_freq` timesteps
+(overwriting in place):
 
-  <out_dir>/dashboard.png     — loss curves + rollout stats from SB3's progress.csv
-  <out_dir>/recent_games.png  — final boards of recently finished training episodes
+  <out_dir>/dashboard.html    — interactive auto-updating dashboard (see below)
+  <out_dir>/data.json         — metrics + recent boards consumed by the dashboard
+  <out_dir>/dashboard.png     — static export: loss curves + rollout stats
+  <out_dir>/recent_games.png  — static export: final boards of recent episodes
+
+The HTML dashboard is served on http://127.0.0.1:<dashboard_port> by a daemon
+thread for the duration of training; the page polls data.json every 5 s. The
+latest data is also embedded into dashboard.html itself, so opening the file
+directly (file://) after training shows the final snapshot without a server.
 
 Requires the model's logger to include a CSV writer (see self_play.train).
 """
 
 import csv
+import functools
+import json
+import os
+import threading
+import time
 from collections import deque
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 from stable_baselines3.common.callbacks import BaseCallback
 
 # Palette (light mode)
@@ -48,20 +62,49 @@ DASHBOARD_PANELS = [
 
 X_KEY = "time/total_timesteps"
 
+_TEMPLATE_PATH = Path(__file__).parent / "dashboard_template.html"
+
+
+class _QuietHandler(SimpleHTTPRequestHandler):
+    """Serve files without spamming the training console."""
+
+    def log_message(self, *args):
+        pass
+
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
 
 class DiagnosticsCallback(BaseCallback):
     """
     Every `plot_freq` timesteps, re-render diagnostic figures from the CSV
-    log and the final boards of recently completed episodes.
+    log and the final boards of recently completed episodes, and refresh the
+    data behind the live HTML dashboard.
     """
 
-    def __init__(self, log_dir, out_dir, plot_freq: int = 2048, n_boards: int = 6, verbose: int = 0):
+    def __init__(self, log_dir, out_dir, plot_freq: int = 2048, n_boards: int = 12,
+                 dashboard_port: int = 8787, run_info: dict = None, verbose: int = 0):
         super().__init__(verbose)
         self.progress_csv = Path(log_dir) / "progress.csv"
         self.out_dir = Path(out_dir)
         self.plot_freq = plot_freq
+        self.dashboard_port = dashboard_port
+        self.run_info = run_info or {}
         self._last_plot = 0
         self._recent_games = deque(maxlen=n_boards)
+        self._template = None
+        self._httpd = None
+
+    def _on_training_start(self) -> None:
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        if _TEMPLATE_PATH.exists():
+            self._template = _TEMPLATE_PATH.read_text(encoding="utf-8")
+        else:
+            print(f"[Diagnostics] Template missing ({_TEMPLATE_PATH}); HTML dashboard disabled")
+        self._write_dashboard()
+        if self.dashboard_port and self._template:
+            self._start_server()
 
     def _on_step(self) -> bool:
         for info in self.locals.get("infos", []):
@@ -82,10 +125,70 @@ class DiagnosticsCallback(BaseCallback):
         try:
             self._plot_dashboard()
             self._plot_recent_games()
+            self._write_dashboard()
             if self.verbose:
                 print(f"[Diagnostics] Figures updated at step {self.num_timesteps} -> {self.out_dir}")
         except Exception as e:  # never kill training over a plotting hiccup
             print(f"[Diagnostics] Plotting failed at step {self.num_timesteps}: {e}")
+
+    # ------------------------------------------------------------------
+    # Live HTML dashboard
+    # ------------------------------------------------------------------
+
+    def _start_server(self):
+        handler = functools.partial(_QuietHandler, directory=str(self.out_dir))
+        for port in range(self.dashboard_port, self.dashboard_port + 10):
+            try:
+                self._httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
+                break
+            except OSError:
+                continue
+        if self._httpd is None:
+            print(f"[Diagnostics] No free port in {self.dashboard_port}..{self.dashboard_port + 9}; "
+                  "dashboard files still written")
+            return
+        threading.Thread(target=self._httpd.serve_forever, daemon=True).start()
+        print(f"[Diagnostics] Live dashboard: http://127.0.0.1:{self._httpd.server_address[1]}/dashboard.html")
+
+    def _payload(self) -> dict:
+        from gym_tafl.envs.configs import ATK, DEF, DRAW, ATTACKER, DEFENDER, KING, THRONE, CORNER
+
+        metrics = {}
+        cols = self._read_progress()
+        if cols:
+            x = cols[X_KEY]
+            for key, _ in DASHBOARD_PANELS:
+                y = cols[key]
+                ok = ~np.isnan(x) & ~np.isnan(y)
+                metrics[key] = {"x": x[ok].tolist(), "y": y[ok].tolist()}
+
+        games = [{
+            "board": np.asarray(g["board"]).astype(int).tolist(),
+            "winner": int(g["winner"]) if g["winner"] is not None else None,
+            "reason": str(g["reason"]),
+            "step": int(g["step"]),
+        } for g in self._recent_games]
+
+        return {
+            "meta": {**self.run_info,
+                     "num_timesteps": int(self.num_timesteps),
+                     "updated_at": time.time()},
+            "panels": [{"key": k, "title": t} for k, t in DASHBOARD_PANELS],
+            "metrics": metrics,
+            "games": games,
+            "tiles": {"attacker": int(ATTACKER), "defender": int(DEFENDER), "king": int(KING),
+                      "throne": int(THRONE), "corner": int(CORNER)},
+            "players": {"atk": int(ATK), "def": int(DEF), "draw": int(DRAW)},
+        }
+
+    def _write_dashboard(self):
+        blob = json.dumps(self._payload()).replace("</", "<\\/")
+        tmp = self.out_dir / "data.json.tmp"
+        tmp.write_text(blob, encoding="utf-8")
+        os.replace(tmp, self.out_dir / "data.json")  # atomic: no torn reads while polling
+        if self._template:
+            html = self._template.replace("/*__DATA__*/null", blob, 1)
+            (self.out_dir / "dashboard.html").write_text(html, encoding="utf-8")
 
     # ------------------------------------------------------------------
     # Dashboard
@@ -128,9 +231,11 @@ class DiagnosticsCallback(BaseCallback):
             else:
                 ax.text(0.5, 0.5, "no data yet", transform=ax.transAxes,
                         ha="center", va="center", color=MUTED, fontsize=10)
-            ax.set_title(title, color=INK_SECONDARY, fontsize=11, loc="left")
+            ax.set_title(title, color=INK_SECONDARY, fontsize=11, loc="left", pad=10)
             ax.grid(True, color=GRID, linewidth=0.8)
             ax.tick_params(colors=MUTED, labelsize=8)
+            ax.xaxis.set_major_locator(MaxNLocator(nbins=4))
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
             for side in ("top", "right"):
                 ax.spines[side].set_visible(False)
             for side in ("left", "bottom"):
@@ -141,7 +246,7 @@ class DiagnosticsCallback(BaseCallback):
 
         fig.suptitle(f"Training diagnostics — {self.num_timesteps:,} timesteps",
                      color=INK, fontsize=13, x=0.01, ha="left")
-        fig.tight_layout(rect=(0, 0, 1, 0.95))
+        fig.tight_layout(rect=(0, 0, 1, 0.93), h_pad=2.5, w_pad=2.5)
         fig.savefig(self.out_dir / "dashboard.png", dpi=110, facecolor=SURFACE)
         plt.close(fig)
 
@@ -154,8 +259,8 @@ class DiagnosticsCallback(BaseCallback):
             return
         from gym_tafl.envs.configs import ATK, DEF, DRAW, ATTACKER, DEFENDER, KING, THRONE, CORNER
 
-        games = list(self._recent_games)
-        fig, axes = plt.subplots(2, 3, figsize=(12, 8.5), facecolor=SURFACE)
+        games = list(self._recent_games)[-6:]
+        fig, axes = plt.subplots(2, 3, figsize=(12, 9), facecolor=SURFACE)
         winner_name = {ATK: "ATK wins", DEF: "DEF wins", DRAW: "Draw"}
 
         for ax, game in zip(axes.flat, games):
@@ -183,15 +288,14 @@ class DiagnosticsCallback(BaseCallback):
             ax.set_aspect("equal")
             for spine in ax.spines.values():
                 spine.set_color(BASELINE)
-            title = f"{winner_name.get(game['winner'], 'Unfinished')} — {game['reason']}"
-            ax.set_title(f"{title}\n(seen at step {game['step']:,})",
-                         color=INK_SECONDARY, fontsize=10)
+            title = f"{winner_name.get(game['winner'], 'Unfinished')} — {game['reason']} · step {game['step']:,}"
+            ax.set_title(title, color=INK_SECONDARY, fontsize=9.5, pad=8)
 
         for ax in axes.flat[len(games):]:
             ax.axis("off")
 
         fig.suptitle("Final boards — recent training episodes",
                      color=INK, fontsize=13, x=0.01, ha="left")
-        fig.tight_layout(rect=(0, 0, 1, 0.95))
+        fig.tight_layout(rect=(0, 0, 1, 0.93), h_pad=3.0, w_pad=2.0)
         fig.savefig(self.out_dir / "recent_games.png", dpi=110, facecolor=SURFACE)
         plt.close(fig)
