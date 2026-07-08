@@ -95,8 +95,14 @@ class DiagnosticsCallback(BaseCallback):
         self._recent_games = deque(maxlen=n_boards)
         self._template = None
         self._httpd = None
+        self._training_started = False
 
     def _on_training_start(self) -> None:
+        if self._training_started:
+            # duel mode calls learn() repeatedly with the same callback
+            # instance; server/template setup must run only once
+            return
+        self._training_started = True
         self.out_dir.mkdir(parents=True, exist_ok=True)
         if _TEMPLATE_PATH.exists():
             self._template = _TEMPLATE_PATH.read_text(encoding="utf-8")
