@@ -1,0 +1,31 @@
+# Default training configuration (Hydra)
+# Run: python experiments/run.py (uses this file)
+# Override: python experiments/run.py training.side=def obs_mode=perspective
+
+obs_mode: canonical        # canonical | perspective
+variant: tablut
+
+training:
+  side: atk                # atk | def
+  total_timesteps: 1_000_000
+  opponent_update_freq: 50_000
+  features_dim: 256
+  learning_rate: 3e-4
+  n_steps: 2048
+  batch_size: 64
+  n_epochs: 10
+  save_dir: null           # defaults to checkpoints/<run_name>
+  run_name: null           # auto-generated if null
+  use_wandb: false
+  verbose: 1
+
+cross_play:
+  source_ckpt: null        # path to trained model; required for cross-play mode
+  target_side: def
+  total_timesteps: 200_000
+  opponent_update_freq: 25_000
+  run_name: null
+  use_wandb: false
+
+eval:
+  n_episodes: 200

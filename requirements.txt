@@ -1,0 +1,24 @@
+# Install into the 'hnefatafl' conda environment:
+#   conda activate hnefatafl
+#   pip install -r requirements.txt
+
+# Game engine
+gym_tafl @ git+https://github.com/gallorob/tafl-gym.git
+
+# RL
+gymnasium>=1.0
+stable-baselines3>=2.8
+sb3-contrib>=2.8
+
+# Deep learning
+torch  # install CPU or CUDA build separately
+
+# Multi-agent
+pettingzoo>=1.24
+
+# Experiment management
+hydra-core>=1.3
+wandb>=0.16
+
+# Utilities
+numpy>=1.24
