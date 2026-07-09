@@ -9,6 +9,9 @@ well a policy learned as one side transfers to the other:
 
 - **Phase 1 — Self-play:** train a single side (ATK or DEF) with [MaskablePPO](https://sb3-contrib.readthedocs.io/en/master/modules/ppo_mask.html),
   periodically snapshotting the policy as its own opponent.
+- **Phase 1b — Adversarial co-training (`mode=duel`):** two side-dedicated networks
+  (one always ATK, one always DEF) train alternately in one run, each battling a
+  frozen snapshot of the other. No random opponents; the arms race is the point.
 - **Phase 2 — Cross-perspective transfer:** take a checkpoint trained as one side and
   evaluate/fine-tune it playing the *other* side, measuring zero-shot performance and
   adaptation speed.
@@ -50,6 +53,9 @@ python experiments/run.py mode=train training.side=atk
 # ...or the defender, with the perspective observation encoding and W&B logging
 python experiments/run.py mode=train training.side=def obs_mode=perspective training.use_wandb=true
 
+# Phase 1b: duel — two networks battle and both train
+python experiments/run.py mode=duel duel.run_name=duel_v1
+
 # Phase 2: transfer an attacker checkpoint to the defender side
 python experiments/run.py mode=cross_play \
     cross_play.source_ckpt=checkpoints/selfplay_atk_canonical/final_model \
@@ -59,12 +65,22 @@ python experiments/run.py mode=cross_play \
 python experiments/run.py mode=eval \
     eval.ckpt=checkpoints/selfplay_atk_canonical/final_model \
     eval.side=atk
+
+# Head-to-head: evaluate one checkpoint against another (plays the other side)
+python experiments/run.py mode=eval eval.ckpt=checkpoints/duel_v1/atk/final_model \
+    eval.side=atk eval.opponent_ckpt=checkpoints/duel_v1/def/final_model
 ```
+
+`eval.opponent_ckpt` replaces the default random opponent with a checkpoint that
+plays the other side. Leave it unset to keep the fixed random yardstick
+(baselines vs random: ATK 16%, DEF 41%, draws 43%).
 
 Models are written to `checkpoints/<run_name>/`: interim `model_<steps>_steps.zip` every
 25k timesteps (`training.checkpoint_freq`, `0` disables) so interrupted runs keep their
 latest weights, plus `final_model.zip` on completion. TensorBoard and CSV metric logs go
-to `checkpoints/<run_name>/logs/`.
+to `checkpoints/<run_name>/logs/`. Duel runs write the same layout once per side, under
+`checkpoints/<run_name>/atk/` and `checkpoints/<run_name>/def/`; the ATK dashboard
+serves on `duel.dashboard_port` (default 8787), DEF on the next port.
 
 ### Live diagnostics
 
@@ -90,9 +106,10 @@ Everything is refreshed every PPO update (tune with `training.plot_freq=<timeste
 | [env/observations.py](env/observations.py) | Board encodings: `canonical` (absolute pieces + side flag) and `perspective` (own vs. enemy) — both 9x9x6 |
 | [agents/networks.py](agents/networks.py) | CNN feature extractors for SB3 (`TaflCNN`, `SharedTaflCNN`) |
 | [training/self_play.py](training/self_play.py) | Phase 1 training loop and the self-play opponent snapshot callback |
+| [training/duel.py](training/duel.py) | Phase 1b adversarial co-training: two networks train alternately against each other |
 | [training/cross_play.py](training/cross_play.py) | Phase 2 transfer fine-tuning and zero-shot evaluation |
 | [eval/metrics.py](eval/metrics.py) | Win-rate measurement and a simple Elo tracker |
-| [experiments/run.py](experiments/run.py) | Hydra CLI dispatching `mode=train\|cross_play\|eval` |
+| [experiments/run.py](experiments/run.py) | Hydra CLI dispatching `mode=train\|duel\|cross_play\|eval` |
 | [notes/](notes/) | Plain-English explainer notes on the codebase and how the RL training works (start at the overview note) |
 | [variants/tablut.ini](variants/tablut.ini) | Game rules (board layout, king capture, draw conditions) read by tafl-gym |
 | [configs.ini](configs.ini) | Piece/player constants read by tafl-gym |

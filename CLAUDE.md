@@ -5,9 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 RL research project training agents to play Hnefatafl (Tablut variant, 9x9) with MaskablePPO.
-The research is phased: Phase 1 = single-side self-play training, Phase 2 = cross-perspective
-transfer (fine-tune an ATK-trained policy to play DEF, or vice versa), Phase 3 = shared
-representation (side-conditioned network, see `SharedTaflCNN`).
+The research is phased: Phase 1 = single-side self-play training (baseline), Phase 1b =
+adversarial co-training of two side-dedicated networks (`mode=duel`), Phase 2 =
+cross-perspective transfer (fine-tune an ATK-trained policy to play DEF, or vice
+versa), Phase 3 = shared representation (side-conditioned network, see `SharedTaflCNN`).
 
 The game engine itself is NOT in this repo — it comes from the external `gym_tafl` package
 (`tafl-gym`, installed from GitHub via requirements.txt). This repo wraps it for SB3.
@@ -30,6 +31,13 @@ All experiments go through the Hydra entry point (config: `experiments/configs/d
 ```bash
 # Phase 1 — self-play training
 python experiments/run.py mode=train training.side=atk
+
+# Phase 1b — adversarial co-training (two networks battle and both train)
+python experiments/run.py mode=duel duel.run_name=duel_v1
+
+# Head-to-head evaluation between two checkpoints (opponent plays the other side)
+python experiments/run.py mode=eval eval.ckpt=checkpoints/duel_v1/atk/final_model \
+    eval.side=atk eval.opponent_ckpt=checkpoints/duel_v1/def/final_model
 
 # Phase 2 — cross-perspective transfer
 python experiments/run.py mode=cross_play \
@@ -95,6 +103,16 @@ gym_tafl (external engine)  →  env/  →  agents/  →  training/  →  experi
   is uniform random. Gymnasium 1.x does not forward attribute access through wrappers
   (TaflEnv → ActionMasker → Monitor): use `env_method`/`get_attr` (they resolve via
   `get_wrapper_attr`), never `VecEnv.set_attr`, which only touches the outermost wrapper.
+- `training/duel.py` — Phase 1b: two side-dedicated MaskablePPO models train
+  alternately (`duel.steps_per_phase` each) in one process, each side playing against
+  a frozen CPU snapshot of the other (installed per phase via
+  `env_method("set_opponent", ...)`; snapshots encode observations with their own
+  side). No random opponents: phase 0's opponent is the untrained DEF network.
+  Outputs per side under `checkpoints/<run>/{atk,def}/`; ATK dashboard on
+  `duel.dashboard_port`, DEF on the next port. `duel.total_timesteps_per_side` is a
+  budget of ADDITIONAL steps (warm starts via `duel.atk_ckpt`/`duel.def_ckpt` keep
+  their step counters). Repeated `learn()` calls require callbacks to be
+  reused/idempotent — see `DiagnosticsCallback._training_started`.
 - `training/diagnostics.py` — `DiagnosticsCallback` regenerates
   `checkpoints/<run>/diagnostics/` every `training.plot_freq` timesteps (0 disables):
   PNG figures plus a live HTML dashboard (`dashboard.html` + `data.json`, template at

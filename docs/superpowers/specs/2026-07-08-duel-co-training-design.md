@@ -1,7 +1,7 @@
 # Duel mode: adversarial co-training of two side-dedicated networks
 
 **Date:** 2026-07-08
-**Status:** Approved design, pending implementation
+**Status:** Implemented (2026-07-08)
 **Mode name:** `mode=duel`
 
 ## Motivation
