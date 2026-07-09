@@ -115,15 +115,27 @@ def main(cfg: DictConfig):
         side = ATK if side_str == "atk" else DEF
         ckpt = cfg.eval.ckpt
 
+        if cfg.eval.opponent_ckpt:
+            from training.self_play import PolicyOpponent
+            opp_side = DEF if side == ATK else ATK
+            opp_model = load(cfg.eval.opponent_ckpt)
+            opponent_fn = PolicyOpponent(opp_model.policy, side=opp_side,
+                                         obs_mode=cfg.obs_mode)
+            opp_name = str(cfg.eval.opponent_ckpt)
+        else:
+            opponent_fn = random_opponent
+            opp_name = "random"
+
         model = load(ckpt)
         results = win_rate(
             policy_fn=model_policy_fn(model),
             side=side,
-            opponent_fn=random_opponent,
+            opponent_fn=opponent_fn,
             n_episodes=cfg.eval.n_episodes,
             obs_mode=cfg.obs_mode,
         )
-        print(f"\n=== Eval results ({side_str} vs random, {cfg.eval.n_episodes} eps) ===")
+        print(f"\n=== Eval results ({ckpt} as {side_str} vs {opp_name}, "
+              f"{cfg.eval.n_episodes} eps) ===")
         for k, v in results.items():
             print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
 

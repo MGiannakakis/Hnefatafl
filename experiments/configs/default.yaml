@@ -59,4 +59,5 @@ duel:
 eval:
   ckpt: null               # path to trained model; required for eval mode
   side: atk                # atk | def
+  opponent_ckpt: null      # optional: checkpoint that plays the OTHER side; random when null
   n_episodes: 200
