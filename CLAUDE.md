@@ -105,9 +105,13 @@ gym_tafl (external engine)  →  env/  →  agents/  →  training/  →  experi
   `get_wrapper_attr`), never `VecEnv.set_attr`, which only touches the outermost wrapper.
 - `training/duel.py` — Phase 1b: two side-dedicated MaskablePPO models train
   alternately (`duel.steps_per_phase` each) in one process, each side playing against
-  a frozen CPU snapshot of the other (installed per phase via
-  `env_method("set_opponent", ...)`; snapshots encode observations with their own
-  side). No random opponents: phase 0's opponent is the untrained DEF network.
+  a `PoolOpponent` of the rival's frozen CPU snapshots (per episode: newest with
+  `duel.pool_p_latest`, else uniform over the last `duel.pool_size`; pools grow via
+  `env_method("add_opponent_snapshot", ...)`, one pool instance per sub-env;
+  snapshots encode observations with their own side). The pool + short phases +
+  `duel.ent_coef` exist to prevent self-play cycling — don't set `pool_size=1` /
+  `ent_coef=0` except to reproduce that pathology deliberately. No random
+  opponents: phase 0's opponent is the untrained DEF network.
   Outputs per side under `checkpoints/<run>/{atk,def}/`; ATK dashboard on
   `duel.dashboard_port`, DEF on the next port. `duel.total_timesteps_per_side` is a
   budget of ADDITIONAL steps (warm starts via `duel.atk_ckpt`/`duel.def_ckpt` keep

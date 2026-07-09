@@ -40,7 +40,7 @@ cross_play:
 
 duel:
   total_timesteps_per_side: 1_000_000   # ADDITIONAL steps per side this run
-  steps_per_phase: 50_000  # alternation granularity: train one side this much, then swap
+  steps_per_phase: 10_000  # alternation granularity: short phases curb per-rival overfitting
   features_dim: 256
   learning_rate: 3e-4
   n_envs: 8                # per side; two vec envs exist but only one trains at a time
@@ -48,6 +48,9 @@ duel:
   n_steps: 256             # per env; buffer per update = n_steps * n_envs
   batch_size: 512
   n_epochs: 10
+  ent_coef: 0.01           # entropy bonus: stochastic policies are harder to exploit
+  pool_size: 20            # opponent pool: keep the rival's last N snapshots (1 = latest only)
+  pool_p_latest: 0.8       # P(episode opponent = newest snapshot); else uniform over older
   atk_ckpt: null           # optional warm starts; fresh networks when null
   def_ckpt: null
   run_name: null           # defaults to duel_<obs_mode>

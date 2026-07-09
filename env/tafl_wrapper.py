@@ -89,6 +89,10 @@ class TaflEnv(gym.Env):
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
+        # Pool opponents re-sample which frozen rival plays this episode
+        new_episode = getattr(self.opponent_fn, "new_episode", None)
+        if new_episode is not None:
+            new_episode()
         self._board = self._start_board.copy()
         self._engine.no_capture_turns_counter = 0
         self._current_player = self._engine.STARTING_PLAYER
@@ -157,6 +161,15 @@ class TaflEnv(gym.Env):
         VecEnv.env_method("set_opponent", ...) — do not use VecEnv.set_attr,
         which only touches the outermost wrapper."""
         self.opponent_fn = opponent_fn
+
+    def add_opponent_snapshot(self, snapshot: OpponentFn) -> None:
+        """Feed a new frozen snapshot to the opponent: pools (anything with
+        an add_member method) accumulate it, plain opponents are replaced."""
+        add = getattr(self.opponent_fn, "add_member", None)
+        if add is not None:
+            add(snapshot)
+        else:
+            self.opponent_fn = snapshot
 
     def get_board(self) -> np.ndarray:
         return self._board.copy()

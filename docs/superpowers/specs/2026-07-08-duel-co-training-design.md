@@ -1,7 +1,12 @@
 # Duel mode: adversarial co-training of two side-dedicated networks
 
 **Date:** 2026-07-08
-**Status:** Implemented (2026-07-08)
+**Status:** Implemented (2026-07-08). Addendum: the first run (duel_v1) exhibited
+the anticipated cycling risk (phase rewards pinned at +1.0, 3-move exploit games,
+non-transitive head-to-heads from ~200k steps), so the deferred opponent pool was
+built same-day: `PoolOpponent` in `training/duel.py` (latest-biased per-episode
+sampling via a `TaflEnv.reset()` hook), plus defaults `steps_per_phase=10k` and
+`ent_coef=0.01`.
 **Mode name:** `mode=duel`
 
 ## Motivation

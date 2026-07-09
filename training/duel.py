@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.logger import configure
 from sb3_contrib import MaskablePPO
@@ -24,9 +25,50 @@ from sb3_contrib import MaskablePPO
 _PROJECT_ROOT = Path(__file__).parent.parent
 
 
-def _snapshot_into(env, model, side: int, obs_mode: str) -> None:
-    """Freeze `model`'s current policy and install it as the opponent in
-    every sub-env of `env`, encoded with the snapshot's own `side`."""
+class PoolOpponent:
+    """
+    Latest-biased pool of frozen rival snapshots.
+
+    Playing only the newest snapshot invites cycling: each phase the learner
+    finds that one rival's blind spot, wins every game with a short exploit
+    line, and forgets everything else. Sampling each episode's opponent from
+    the snapshot history (latest with probability `p_latest`, else uniform
+    over the older members) forces strategies that beat the whole population.
+
+    TaflEnv.reset() calls new_episode() to re-sample; TaflEnv.
+    add_opponent_snapshot() calls add_member(). Module-level class so it
+    pickles into SubprocVecEnv workers.
+    """
+
+    def __init__(self, side: int, obs_mode: str, max_members: int = 20,
+                 p_latest: float = 0.8):
+        self.side = side
+        self.obs_mode = obs_mode
+        self.max_members = max_members
+        self.p_latest = p_latest
+        self.members: list = []
+        self._active = None
+
+    def add_member(self, snapshot) -> None:
+        self.members.append(snapshot)
+        if len(self.members) > self.max_members:
+            self.members.pop(0)  # FIFO: bounded worker RAM beats deep history
+
+    def new_episode(self) -> None:
+        if len(self.members) == 1 or np.random.rand() < self.p_latest:
+            self._active = self.members[-1]
+        else:
+            self._active = self.members[np.random.randint(len(self.members) - 1)]
+
+    def __call__(self, board: np.ndarray, valid_actions: list) -> int:
+        if self._active is None:
+            self.new_episode()
+        return self._active(board, valid_actions)
+
+
+def _make_snapshot(model, side: int, obs_mode: str):
+    """Freeze `model`'s current policy into a PolicyOpponent encoded with the
+    snapshot's own `side`."""
     from training.self_play import PolicyOpponent
     # Right after learn(), policy.action_dist still caches the last gradient
     # step's MaskableCategorical, whose logits are non-leaf tensors deepcopy
@@ -34,8 +76,13 @@ def _snapshot_into(env, model, side: int, obs_mode: str) -> None:
     dist = getattr(model.policy, "action_dist", None)
     if dist is not None and getattr(dist, "distribution", None) is not None:
         dist.distribution = None
-    opponent = PolicyOpponent(copy.deepcopy(model.policy), side=side, obs_mode=obs_mode)
-    env.env_method("set_opponent", opponent)
+    return PolicyOpponent(copy.deepcopy(model.policy), side=side, obs_mode=obs_mode)
+
+
+def _snapshot_into(env, model, side: int, obs_mode: str) -> None:
+    """Freeze `model`'s current policy and feed it to every sub-env of `env`:
+    appended if the opponent is a pool, installed outright otherwise."""
+    env.env_method("add_opponent_snapshot", _make_snapshot(model, side, obs_mode))
 
 
 def _resolve_ckpt(label: str, ckpt: Optional[str]) -> Optional[str]:
@@ -57,6 +104,9 @@ def duel_train(
     n_steps: int = 256,
     batch_size: int = 512,
     n_epochs: int = 10,
+    ent_coef: float = 0.01,
+    pool_size: int = 20,
+    pool_p_latest: float = 0.8,
     atk_ckpt: Optional[str] = None,
     def_ckpt: Optional[str] = None,
     run_name: Optional[str] = None,
@@ -93,7 +143,8 @@ def duel_train(
 
         if warm[side]:
             models[side] = MaskablePPO.load(
-                warm[side], env=envs[side], n_steps=n_steps, batch_size=batch_size)
+                warm[side], env=envs[side], n_steps=n_steps, batch_size=batch_size,
+                ent_coef=ent_coef)
         else:
             models[side] = MaskablePPO(
                 "CnnPolicy",
@@ -103,6 +154,7 @@ def duel_train(
                 n_steps=n_steps,  # per env: buffer per update = n_steps * n_envs
                 batch_size=batch_size,
                 n_epochs=n_epochs,
+                ent_coef=ent_coef,  # keep policies stochastic: harder to exploit
                 gamma=0.99,
                 verbose=verbose,
             )
@@ -136,11 +188,20 @@ def duel_train(
             ))
         callbacks[side] = cbs
 
-    # Phase 0 opponent for ATK: the (untrained or warm-started) DEF network.
-    _snapshot_into(envs[ATK], models[DEF], DEF, obs_mode)
-    # Pre-install ATK into DEF's env too, so an ATK-budget-exhausted warm start
-    # never leaves DEF facing TaflEnv's default random opponent.
-    _snapshot_into(envs[DEF], models[ATK], ATK, obs_mode)
+    # Each side faces a pool of the rival's snapshot history, seeded with the
+    # rival's starting policy (untrained or warm-started) so phase 0 has an
+    # opponent. Every _snapshot_into afterwards appends to these pools.
+    # One pool INSTANCE per sub-env: with DummyVecEnv a broadcast-shared pool
+    # would receive every add_opponent_snapshot n_envs times, filling itself
+    # with duplicates and evicting real history early. (Sharing the seed
+    # snapshot object is fine — snapshots are stateless per call.)
+    for side, other in ((ATK, DEF), (DEF, ATK)):
+        seed = _make_snapshot(models[other], other, obs_mode)
+        for idx in range(n_envs):
+            pool = PoolOpponent(side=other, obs_mode=obs_mode,
+                                max_members=pool_size, p_latest=pool_p_latest)
+            pool.add_member(seed)
+            envs[side].env_method("set_opponent", pool, indices=[idx])
 
     phase = 0
     try:
