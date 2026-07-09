@@ -38,6 +38,24 @@ cross_play:
   use_wandb: false
   checkpoint_freq: 25_000  # save model_<steps>_steps.zip every N timesteps; 0 disables
 
+duel:
+  total_timesteps_per_side: 1_000_000   # ADDITIONAL steps per side this run
+  steps_per_phase: 50_000  # alternation granularity: train one side this much, then swap
+  features_dim: 256
+  learning_rate: 3e-4
+  n_envs: 8                # per side; two vec envs exist but only one trains at a time
+  vec_env: subproc         # subproc | dummy
+  n_steps: 256             # per env; buffer per update = n_steps * n_envs
+  batch_size: 512
+  n_epochs: 10
+  atk_ckpt: null           # optional warm starts; fresh networks when null
+  def_ckpt: null
+  run_name: null           # defaults to duel_<obs_mode>
+  checkpoint_freq: 25_000  # per side; save model_<steps>_steps.zip every N timesteps; 0 disables
+  plot_freq: 10_000        # per side; 0 disables diagnostics
+  dashboard_port: 8787     # ATK dashboard; DEF serves on dashboard_port + 1; 0 disables
+  verbose: 1
+
 eval:
   ckpt: null               # path to trained model; required for eval mode
   side: atk                # atk | def

@@ -82,6 +82,29 @@ def main(cfg: DictConfig):
             checkpoint_freq=cfg.cross_play.checkpoint_freq,
         )
 
+    elif mode == "duel":
+        from training.duel import duel_train
+
+        duel_train(
+            total_timesteps_per_side=cfg.duel.total_timesteps_per_side,
+            steps_per_phase=cfg.duel.steps_per_phase,
+            obs_mode=cfg.obs_mode,
+            features_dim=cfg.duel.features_dim,
+            learning_rate=cfg.duel.learning_rate,
+            n_envs=cfg.duel.n_envs,
+            vec_env=cfg.duel.vec_env,
+            n_steps=cfg.duel.n_steps,
+            batch_size=cfg.duel.batch_size,
+            n_epochs=cfg.duel.n_epochs,
+            atk_ckpt=cfg.duel.atk_ckpt,
+            def_ckpt=cfg.duel.def_ckpt,
+            run_name=cfg.duel.run_name,
+            checkpoint_freq=cfg.duel.checkpoint_freq,
+            plot_freq=cfg.duel.plot_freq,
+            dashboard_port=cfg.duel.dashboard_port,
+            verbose=cfg.duel.verbose,
+        )
+
     elif mode == "eval":
         from gym_tafl.envs.configs import ATK, DEF
         from training.self_play import load
@@ -105,7 +128,7 @@ def main(cfg: DictConfig):
             print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
 
     else:
-        print(f"Unknown mode: {mode}. Use mode=train|cross_play|eval")
+        print(f"Unknown mode: {mode}. Use mode=train|duel|cross_play|eval")
 
 
 if __name__ == "__main__":
