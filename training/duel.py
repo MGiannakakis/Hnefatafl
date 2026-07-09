@@ -210,13 +210,18 @@ def duel_train(
                 model = models[side]
                 if model.num_timesteps >= budgets[side]:
                     continue
-                target = min(model.num_timesteps + steps_per_phase, budgets[side])
+                # reset_num_timesteps=False makes SB3 treat total_timesteps as
+                # ADDITIONAL steps (it adds num_timesteps internally), so pass
+                # the phase length, not an absolute target — passing an
+                # absolute target runs ~2x all prior steps every phase.
+                phase_steps = min(steps_per_phase, budgets[side] - model.num_timesteps)
                 if verbose:
                     print(f"[duel] Phase {phase}: {side_names[side].upper()} "
-                          f"{model.num_timesteps:,} -> {target:,} "
+                          f"{model.num_timesteps:,} -> "
+                          f"{model.num_timesteps + phase_steps:,} "
                           f"(vs {side_names[other].upper()} @ "
                           f"{models[other].num_timesteps:,})")
-                model.learn(total_timesteps=target,
+                model.learn(total_timesteps=phase_steps,
                             callback=callbacks[side],
                             reset_num_timesteps=False)
                 _snapshot_into(envs[other], model, side, obs_mode)

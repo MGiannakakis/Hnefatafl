@@ -58,8 +58,11 @@ def test_duel_train_completes():
         run_name=RUN,
         verbose=0,
     )
-    assert models["atk"].num_timesteps >= 512, models["atk"].num_timesteps
-    assert models["def"].num_timesteps >= 512, models["def"].num_timesteps
+    # bounded on BOTH sides: >= budget but not exponentially over (a bare
+    # >= let the reset_num_timesteps doubling bug through originally).
+    # rollout = n_steps * n_envs = 64 * 2 = 128
+    assert 512 <= models["atk"].num_timesteps <= 512 + 128, models["atk"].num_timesteps
+    assert 512 <= models["def"].num_timesteps <= 512 + 128, models["def"].num_timesteps
     assert (RUN_DIR / "atk" / "final_model.zip").exists()
     assert (RUN_DIR / "def" / "final_model.zip").exists()
     print("OK: duel_train trains both sides and saves both final models")
